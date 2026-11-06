@@ -25,6 +25,7 @@ const sharp = serverRequire('sharp') as (input: Buffer, options?: { raw: { width
 const requiredEnv = ['YUTANG_TEST_DB_HOST', 'YUTANG_TEST_DB_PORT', 'YUTANG_TEST_DB_USER', 'YUTANG_TEST_DB_NAME'];
 const missingTestDatabaseEnv = requiredEnv.filter((key) => !process.env[key]);
 const hasTestDatabase = missingTestDatabaseEnv.length === 0;
+const skipIntegrationTest = !hasTestDatabase && process.env.CI !== 'true';
 const testPepper = 'dsh-yutang-integration-test-pepper-0001';
 
 function toolContext(tools: Map<string, Tool>): Context {
@@ -143,7 +144,7 @@ async function connectAgent(api: YutangApi, baseUrl: string, channelId: string, 
   return socket;
 }
 
-test('ToolCalls persist and publish messages; Inbox claim, renew, reply, and completion use the lease contract', { skip: hasTestDatabase ? false : `Integration database unavailable; set ${missingTestDatabaseEnv.join(', ')}` }, async () => {
+test('ToolCalls persist and publish messages; Inbox claim, renew, reply, and completion use the lease contract', { skip: skipIntegrationTest ? `Integration database unavailable; set ${missingTestDatabaseEnv.join(', ')}` : false }, async () => {
   const avatarDir = join(tmpdir(), `yutang-avatar-${randomUUID()}`);
   const config = loadConfig({
     ...process.env,

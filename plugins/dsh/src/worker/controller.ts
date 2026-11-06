@@ -1,4 +1,4 @@
-import { randomInt } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import type { Context } from '@deepseek-ai/cordis';
 import type {} from '@deepseek-ai/dsh-agent';
 import type {} from '@deepseek-ai/dsh-session-persistence';
@@ -7,7 +7,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { SessionId } from '@deepseek-ai/dsh-session';
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent';
 import type { MentionInboxEvent } from '@dsh-im/client';
-import { buildBrowseTaskPrompt, buildJuryTaskPrompt, WORKER_TASK_PROMPT } from './prompt.js';
+import { buildBrowseTaskPrompt, buildJuryTaskPrompt, WORKER_ISOLATED_SYSTEM_PROMPT, WORKER_TASK_PROMPT } from './prompt.js';
 import { formatMessages } from '../tools/format.js';
 import { activeConnection } from '../storage/state.js';
 import type { YutangRuntime, WorkerTaskSource } from '../service/runtime.js';
@@ -22,8 +22,6 @@ type TaskOutcome = { processed: true; replyMessageId?: string };
 type PendingJuryAssignment = { caseId: string; assignmentId: string; deadlineAt: string; serverId: string };
 
 export class YutangWorker {
-  private handle: AgentHandle | undefined;
-  private selectedAgent: Agent | undefined;
   private selectedSessionId: string | undefined;
   private taskAgent: Agent | undefined;
   private readonly stopInterval: () => void;
@@ -95,7 +93,7 @@ export class YutangWorker {
 
   status() {
     return {
-      worker: this.taskRunning ? 'running' : this.selectedAgent ? 'ready' : 'stopped',
+      worker: this.taskRunning ? 'running' : this.selectedSessionId ? 'ready' : 'stopped',
       realtime: this.socket?.readyState === WebSocket.OPEN ? 'connected' : 'disconnected',
       last_error: this.lastWorkerError,
     };
@@ -112,13 +110,10 @@ export class YutangWorker {
     this.stopHeartbeat();
     this.socket?.close(1000, 'plugin disposed');
     this.socket = undefined;
-    const handle = this.handle;
-    this.handle = undefined;
-    this.selectedAgent = undefined;
     this.selectedSessionId = undefined;
-    if (handle) {
-      if (handle.agent.status === 'running') handle.agent.cancel({ kind: 'hook', reason: 'Yutang plugin disposed' });
-      await handle.dispose();
+    if (this.taskAgent?.status === 'running') {
+      this.taskAgent.cancel({ kind: 'hook', reason: 'Yutang plugin disposed' });
+      await this.taskAgent.whenIdle().catch(() => {});
     }
     this.stopEvents();
   }
@@ -135,9 +130,6 @@ export class YutangWorker {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
     this.stopActiveMentionLease?.();
-    const previous = this.handle;
-    this.handle = undefined;
-    this.selectedAgent = undefined;
     this.selectedSessionId = undefined;
     this.boundServerId = undefined;
     this.realtimeAttemptController?.abort();
@@ -145,12 +137,9 @@ export class YutangWorker {
     this.stopHeartbeat();
     this.socket?.close(1000, 'server connection switched');
     this.socket = undefined;
-    if (previous) {
-      if (previous.agent.status === 'running') {
-        previous.agent.cancel({ kind: 'hook', reason: 'Yutang server connection switched' });
-        if (typeof previous.agent.whenIdle === 'function') await previous.agent.whenIdle().catch(() => {});
-      }
-      await previous.dispose();
+    if (this.taskAgent?.status === 'running') {
+      this.taskAgent.cancel({ kind: 'hook', reason: 'Yutang server connection switched' });
+      if (typeof this.taskAgent.whenIdle === 'function') await this.taskAgent.whenIdle().catch(() => {});
     }
     await this.connectionAttempt.catch(() => {});
   }
@@ -168,16 +157,10 @@ export class YutangWorker {
       this.inboxSubscriptionEnabled = false;
       this.jurySubscriptionEnabled = false;
       this.stopActiveMentionLease?.();
-      const previous = this.handle;
-      this.handle = undefined;
-      this.selectedAgent = undefined;
       this.selectedSessionId = undefined;
-      if (previous) {
-        if (previous.agent.status === 'running') {
-          previous.agent.cancel({ kind: 'hook', reason: 'Yutang server connection switched' });
-          if (typeof previous.agent.whenIdle === 'function') await previous.agent.whenIdle().catch(() => {});
-        }
-        await previous.dispose();
+      if (this.taskAgent?.status === 'running') {
+        this.taskAgent.cancel({ kind: 'hook', reason: 'Yutang server connection switched' });
+        if (typeof this.taskAgent.whenIdle === 'function') await this.taskAgent.whenIdle().catch(() => {});
       }
       this.boundServerId = connection.id;
     }
@@ -373,38 +356,17 @@ export class YutangWorker {
     return true;
   }
 
-  private async ensureSelectedSession(): Promise<Agent> {
+  private async ensureSelectedSession(): Promise<string> {
     const state = await this.runtime.state();
     const sessionId = state.settings.scheduled_session_id;
     if (!sessionId) throw new Error('请先在鱼塘设置中选择运行定时任务的 DSH 会话。');
-    if (this.selectedSessionId === sessionId && this.selectedAgent) {
-      if (this.selectedAgent.status === 'running') throw new Error('所选 DSH 会话当前正在运行，定时任务稍后重试。');
-      return this.selectedAgent;
-    }
-    if (this.handle) {
-      const previous = this.handle;
-      this.handle = undefined;
-      if (previous.agent.status === 'running') {
-        previous.agent.cancel({ kind: 'hook', reason: 'Yutang scheduled session changed' });
-        await previous.agent.whenIdle().catch(() => {});
-      }
-      await previous.dispose();
-    }
-    this.selectedAgent = undefined;
-    this.selectedSessionId = undefined;
     const id = SessionId(sessionId);
     const snapshot = await this.ctx.sessionPersistence.stat(id);
     if (!snapshot || snapshot.header.origin === 'subagent') throw new Error('所选 DSH 会话已不存在或不可用于定时任务。');
     const live = this.ctx.agents.get(id);
-    if (live) {
-      if (live.status === 'running') throw new Error('所选 DSH 会话当前正在运行，定时任务稍后重试。');
-      this.selectedAgent = live;
-    } else {
-      this.handle = await this.ctx.agents.resume({ resumeSessionId: id });
-      this.selectedAgent = this.handle.agent;
-    }
+    if (live?.status === 'running') throw new Error('所选 DSH 会话当前正在运行，定时任务稍后重试。');
     this.selectedSessionId = sessionId;
-    return this.selectedAgent;
+    return sessionId;
   }
 
   private async runTask(taskId: string, channelId: string, source: WorkerTaskSource, prompt: string, expectedServerId?: string, assignmentId?: string): Promise<TaskOutcome> {
@@ -412,19 +374,28 @@ export class YutangWorker {
     if (this.taskRunning) throw new Error('worker task is already active');
     this.taskRunning = true;
     let agent: Agent | undefined;
+    let handle: AgentHandle | undefined;
     let agentId: string | undefined;
     let turnTimeout: ReturnType<typeof setTimeout> | undefined;
     let releaseGrant = () => {};
     try {
-      agent = await this.ensureSelectedSession();
+      const selectedSessionId = await this.ensureSelectedSession();
+      handle = await this.ctx.agents.create({
+        sessionId: SessionId(`yutang-worker-${randomUUID()}`),
+        meta: { origin: 'subagent', parentSession: SessionId(selectedSessionId) },
+        setup: agentCtx => {
+          agentCtx.systemPrompt.section({ name: 'dsh-yutang:isolated-worker', order: 0, complete: true, text: WORKER_ISOLATED_SYSTEM_PROMPT });
+          agentCtx.systemPrompt.suppressRuntimeContext();
+        },
+      });
+      agent = handle.agent;
       agentId = String(agent.id);
       this.taskAgent = agent;
       this.activeTaskSource = source;
       const state = await this.runtime.state();
       const connection = activeConnection(state);
       if (expectedServerId !== undefined && connection.id !== expectedServerId) throw new Error('Server 连接已切换，已丢弃旧连接任务。');
-      if (state.settings.scheduled_session_id !== String(agent.id)) throw new Error('定时会话已更改，已跳过当前任务。');
-      if (agent.status === 'running') throw new Error('所选 DSH 会话当前正在运行，定时任务稍后重试。');
+      if (state.settings.scheduled_session_id !== selectedSessionId) throw new Error('定时会话已更改，已跳过当前任务。');
       const settings = state.settings;
       if (source === 'browse' && (!['auto', 'lurk'].includes(settings.social_mode) || settings.browse_schedule_mode === 'off')
         || source === 'mention' && (settings.social_mode !== 'auto' || !settings.mention_wakeup_enabled)
@@ -454,6 +425,7 @@ export class YutangWorker {
       await this.ctx.sessions.flush(agent.session);
       if (outcome.kind !== 'completed') throw new Error(`worker turn ended with ${outcome.reason}`);
       const replyMessageId = this.runtime.workerReplyMessageId(agentId);
+      await this.recordTaskSummary(selectedSessionId, source, channelId, replyMessageId);
       this.lastWorkerError = undefined;
       return { processed: true, ...(replyMessageId ? { replyMessageId } : {}) };
     } catch (error) {
@@ -469,6 +441,35 @@ export class YutangWorker {
       this.taskAgent = undefined;
       this.activeTaskSource = undefined;
       this.taskRunning = false;
+      if (handle) await handle.dispose().catch(error => this.noteError(error));
+    }
+  }
+
+  private async recordTaskSummary(sessionId: string, source: WorkerTaskSource, channelId: string, replyMessageId?: string) {
+    let handle: AgentHandle | undefined;
+    try {
+      const state = await this.runtime.state();
+      if (state.settings.scheduled_session_id !== sessionId) return;
+      const id = SessionId(sessionId);
+      const live = this.ctx.agents.get(id);
+      if (live?.status === 'running') return;
+      let target = live;
+      if (!target) {
+        handle = await this.ctx.agents.resume({ resumeSessionId: id });
+        target = handle.agent;
+      }
+      const label = source === 'browse' ? '频道巡看' : source === 'mention' ? '@ 消息处理' : '陪审任务';
+      const detail = source === 'jury' ? '' : `；频道 ${channelId}`;
+      const reply = replyMessageId ? `；公开回复消息 ID ${replyMessageId}` : '；未发送公开回复';
+      target.session.append('user/message', createUserMessage({
+        content: [{ type: 'text', text: `【鱼塘后台任务记录】已完成${label}${detail}${reply}。任务上下文已与此会话历史隔离。` }],
+        source: { kind: 'user' },
+      }), { surfaceOp: 'append' });
+      await this.ctx.sessions.flush(target.session);
+    } catch (error) {
+      this.noteError(error);
+    } finally {
+      if (handle) await handle.dispose().catch(error => this.noteError(error));
     }
   }
 
@@ -581,7 +582,7 @@ export class YutangWorker {
         void api.renewInboxLease(event.id, event.lease_token, 600, { signal: leaseAbort.signal }).catch(error => {
           if (leaseAbort.signal.aborted) return;
           this.noteError(error);
-          if (this.handle?.agent.status === 'running') this.handle.agent.cancel({ kind: 'hook', reason: 'Yutang Inbox lease renewal failed' });
+          if (this.taskAgent?.status === 'running') this.taskAgent.cancel({ kind: 'hook', reason: 'Yutang Inbox lease renewal failed' });
         });
       }, 120_000);
       this.stopActiveMentionLease = stopRenewal;

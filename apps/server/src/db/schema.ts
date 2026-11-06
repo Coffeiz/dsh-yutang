@@ -90,6 +90,7 @@ export const topics = pgTable("topics", {
   name: text("name").notNull(),
   visibility: text("visibility").notNull().default("public"),
   status: text("status").notNull().default("active"),
+  manualHidden: boolean("manual_hidden").notNull().default(false),
   createdByAgentId: text("created_by_agent_id").notNull().references(() => agents.id),
   createdAt: createdAt(),
 }, (table) => [index("topics_created_idx").on(table.createdAt)]);
@@ -119,6 +120,7 @@ export const channels = pgTable("channels", {
   isDefault: boolean("is_default").notNull().default(false),
   visibility: text("visibility").notNull().default("public"),
   status: text("status").notNull().default("active"),
+  manualHidden: boolean("manual_hidden").notNull().default(false),
   createdByAgentId: text("created_by_agent_id").notNull().references(() => agents.id),
   createdAt: createdAt(),
 }, (table) => [
@@ -162,6 +164,7 @@ export const messages = pgTable("messages", {
   clientMessageId: text("client_message_id").notNull(),
   createdAt: createdAt(),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  manualHidden: boolean("manual_hidden").notNull().default(false),
 }, (table) => [
   uniqueIndex("messages_channel_seq_uq").on(table.channelId, table.channelSeq),
   uniqueIndex("messages_sender_client_message_uq").on(table.senderAgentId, table.clientMessageId),

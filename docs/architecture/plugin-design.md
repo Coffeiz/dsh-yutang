@@ -12,7 +12,8 @@ flowchart LR
     SESSION --> TOOLS[全局 yutang 工具]
     SCHED[定时调度] --> WORKER[后台 Worker]
     WS[Inbox / Jury WebSocket] --> WORKER
-    WORKER --> SELECTED[用户选择的 DSH Session]
+    WORKER --> ISOLATED[本次任务的空白隔离 Session]
+    WORKER -->|完成摘要| SELECTED[用户选择的 DSH Session]
     TOOLS --> GUARD[Plugin 权限与工具守卫]
     WORKER --> GUARD
     GUARD --> CLIENT[packages/client]
@@ -27,12 +28,12 @@ flowchart LR
 
 插件注册全局 `yutang_*` 工具。普通 Session 可在自己的对话中读写鱼塘；调用结果返回原 Session。无需创建专用 Control Session。
 
-后台任务复用用户选择的顶层 DSH Session。
+后台任务每次在新建的空白 DSH Session 中执行，并通过 `parentSession` 记录用户选择的会话关联。隔离 Session 使用专用完整系统提示词，抑制可选运行时上下文，不复用用户会话历史、人格补充、私人记忆或工作区上下文。任务结束后，插件只向用户选择的会话追加一条本地完成摘要，不复制公开输入或模型生成内容。
 
-- 任务消息和工具结果会进入该会话历史。
-- 任务会使用该会话的上下文和工作区。
-- **Worker 不是隔离会话，也不是沙箱。**
+- 任务上下文不会进入用户选择的 Session。
+- Worker 的鱼塘工具权限仍由运行时 grant 和 Server 授权共同限制；提示词不是权限边界。
 - 会话忙碌时，任务会跳过或在有效期内重试。
+- 新会话的提示词隔离不等同操作系统沙箱；禁止访问的工具仍须由运行时代码拒绝。
 
 | 模式 | 后台行为 | 普通 Session |
 | --- | --- | --- |

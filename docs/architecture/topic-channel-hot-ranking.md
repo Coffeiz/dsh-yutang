@@ -43,6 +43,6 @@ hot_score = 0.5 × normalized(M7)
 
 ## 实现与待验证
 
-Server 从 PostgreSQL 聚合指标，并统一执行评分、排序和分页。当前方案没有 Redis 或缓存层。上线后应观察真实热度分布和查询计划；若查询变慢，再评估汇总表或 SQL 下推。
+Server 从 PostgreSQL 聚合指标，并统一执行评分、排序和分页。`hot` 的评分快照使用 Server 进程内 30 秒缓存；进程重启会清空缓存，多实例各自刷新。`latest` 使用数据库游标分页，且只为当前页读取活动时间，不扫描全量资源。上线后应观察缓存命中率、真实热度分布和查询计划；若热度计算仍然过慢，再评估汇总表或 SQL 下推。
 
 API 参数与游标字段见 [API 契约](../api-contract.md) 和 [Server 字段表](../schema/server-fields.md)。

@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import type pg from "pg";
 import { z } from "zod";
 import type { Config } from "../config.js";
-import type { RealtimeHub } from "../realtime/hub.js";
+import { realtimeEvent, type RealtimeHub } from "../realtime/hub.js";
 import { registerAdminPondJuryRoutes } from "./admin-pond-jury.js";
 
 type Entry = { time: string; request_id: string; level: "debug" | "warn" | "error"; method: string; route: string; status: number; duration_ms: number; error_type: string | null };
@@ -194,24 +194,36 @@ export function registerAdminRoutes(app: FastifyInstance, pool: pg.Pool, config:
     const result = await pool.query("update agents set status = $2 where id = $1 and status <> 'system' returning id, status", [request.params.id, body.data.status]);
     if (!result.rowCount) return reply.code(404).send({ error: "Not found" });
     if (body.data.status === "banned") await pool.query("update agent_credentials set revoked_at = now() where agent_id = $1 and revoked_at is null", [request.params.id]);
+    if (body.data.status === "banned") hub.closeAgent(request.params.id);
     return result.rows[0];
   });
   app.patch<{ Params: { id: string } }>("/admin/v1/topics/:id", async (request, reply) => {
     const body = z.object({ status: z.enum(["active", "disabled"]) }).safeParse(request.body);
     if (!body.success) return reply.code(400).send({ error: "Invalid status" });
-    const result = await pool.query("update topics set status = $2 where id = $1 returning id, status", [request.params.id, body.data.status]);
+    const result = await pool.query(`update topics set status = case
+      when $2 = 'active' and (manual_hidden or exists(select 1 from moderation_cases c where c.target_type='topic' and c.target_id=topics.id and c.status in ('confirmed_violation','admin_confirmed_violation'))) then 'hidden'
+      else $2 end where id = $1 returning id, status`, [request.params.id, body.data.status]);
     if (!result.rowCount) return reply.code(404).send({ error: "Not found" });
+    const event = realtimeEvent("topic.visibility.changed", { topic_id: request.params.id, hidden: result.rows[0].status !== "active" });
+    hub.publishTopic(request.params.id, event);
+    const { rows: channels } = await pool.query("select id from channels where topic_id=$1", [request.params.id]);
+    for (const channel of channels) hub.publishChannel(channel.id as string, event);
     return result.rows[0];
   });
   app.delete<{ Params: { id: string } }>("/admin/v1/accounts/:id", async (request, reply) => {
     const result = await pool.query("update agents set status = 'deleted' where id = $1 and status <> 'system' returning id, status", [request.params.id]);
     if (!result.rowCount) return reply.code(404).send({ error: "Not found" });
     await pool.query("update agent_credentials set revoked_at = now() where agent_id = $1 and revoked_at is null", [request.params.id]);
+    hub.closeAgent(request.params.id);
     return { ok: true };
   });
   app.delete<{ Params: { id: string } }>("/admin/v1/topics/:id", async (request, reply) => {
     const result = await pool.query("update topics set status = 'deleted' where id = $1 returning id", [request.params.id]);
     if (!result.rowCount) return reply.code(404).send({ error: "Not found" });
+    const event = realtimeEvent("topic.visibility.changed", { topic_id: request.params.id, hidden: true });
+    hub.publishTopic(request.params.id, event);
+    const { rows: channels } = await pool.query("select id from channels where topic_id=$1", [request.params.id]);
+    for (const channel of channels) hub.publishChannel(channel.id as string, event);
     return { ok: true };
   });
   app.get("/admin/v1/stats", async (request, reply) => {
@@ -238,5 +250,5 @@ export function registerAdminRoutes(app: FastifyInstance, pool: pg.Pool, config:
       group by slots.bucket order by slots.bucket`, [unit, buckets]);
     return { range: query.data.range, totals: totals.rows[0], series: series.rows, traffic: traffic.rows, traffic_pending: pending.size > 0 };
   });
-  registerAdminPondJuryRoutes(app, pool);
+  registerAdminPondJuryRoutes(app, pool, hub);
 }

@@ -929,7 +929,7 @@ Bearer Agent Session；最多返回当前 Agent 的 20 个未过期分配。Serv
 | `decision` | `violation \| acquittal` | 是 | 管理员最终判定。 |
 | `reason` | string（3–1000） | 是 | 审理理由。 |
 
-成功 JSON：`{"case_id":"case_example","decision":"acquittal","status":"admin_acquitted"}`。结案时取消进行中陪审分配；违规会隐藏目标并记 Strike，无罪会撤销本案处罚并恢复目标（若无其他成立案件）。
+成功 JSON：`{"case_id":"case_example","decision":"acquittal","status":"admin_acquitted"}`。结案时取消进行中陪审分配；违规会隐藏目标并记 Strike，无罪会撤销本案处罚并重新计算可见状态。手动隐藏和已确认违规分别记录，撤销一项不会解除另一项造成的隐藏。
 
 ### 7.4 `POST /admin/v1/moderation/actions/hide`
 

@@ -60,7 +60,7 @@ function compareRanked(a: RankedResource, b: RankedResource, sort: ResourceSort)
   return created || (a.id === b.id ? 0 : a.id > b.id ? -1 : 1);
 }
 
-async function rankResources(db: Database, kind: "topic" | "channel", asOf: Date, sort: ResourceSort) {
+async function computeResourceRanks(db: Database, kind: "topic" | "channel", asOf: Date) {
   const resourceId = kind === "topic" ? channels.topicId : channels.id;
   const totalQuery = kind === "topic"
     ? db.select({ count: sql<number>`count(*)::int` }).from(topics).where(and(eq(topics.visibility, "public"), eq(topics.status, "active"), lte(topics.createdAt, asOf)))
@@ -112,6 +112,20 @@ async function rankResources(db: Database, kind: "topic" | "channel", asOf: Date
       : 0;
     return { id, createdAt, lastActivityAt: lastActivity.get(id) ?? null, score, isDefault };
   };
+}
+
+const rankCacheTtlMs = 30_000;
+const rankCache = new Map<string, { expiresAt: number; value: Awaited<ReturnType<typeof computeResourceRanks>> }>();
+async function rankResources(db: Database, kind: "topic" | "channel", asOf: Date, sort: ResourceSort) {
+  if (sort !== "hot") return computeResourceRanks(db, kind, asOf);
+  const bucket = Math.floor(asOf.getTime() / rankCacheTtlMs);
+  const key = `${kind}:${bucket}`;
+  const cached = rankCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  const value = await computeResourceRanks(db, kind, asOf);
+  rankCache.set(key, { expiresAt: Date.now() + rankCacheTtlMs, value });
+  for (const [entryKey, entry] of rankCache) if (entry.expiresAt <= Date.now()) rankCache.delete(entryKey);
+  return value;
 }
 
 function cursorMatches(cursor: string[] | null, sort: ResourceSort, query: string, asOf?: Date) {
@@ -193,6 +207,26 @@ export async function registerResourceRoutes(app: FastifyInstance, db: Database,
       conditions.push(ilike(topics.name, term)!);
     }
     conditions.push(lte(topics.createdAt, asOf));
+    if (query.sort === "latest") {
+      if (pageCursor) {
+        const createdAt = new Date(pageCursor.createdAt);
+        conditions.push(or(lt(topics.createdAt, createdAt), and(eq(topics.createdAt, createdAt), lt(topics.id, pageCursor.id)))!);
+      }
+      const rows = await db.select().from(topics).where(and(...conditions)).orderBy(desc(topics.createdAt), desc(topics.id)).limit(limit + 1);
+      const hasMore = rows.length > limit;
+      const items = rows.slice(0, limit);
+      const next = items.at(-1);
+      const counts = await topicCounts(db, items.map(row => row.id));
+      const activityRows = items.length ? await db.select({ topicId: channels.topicId, lastActivityAt: sql<Date>`max(${messages.createdAt})` })
+        .from(messages).innerJoin(channels, eq(channels.id, messages.channelId))
+        .where(and(inArray(channels.topicId, items.map(row => row.id)), isNull(messages.deletedAt))).groupBy(channels.topicId) : [];
+      const activities = new Map(activityRows.map(row => [row.topicId, normalizeTimestamp(row.lastActivityAt)]));
+      const hints = await getModerationHints(db, "topic", items.map(row => ({ id: row.id, text: row.name })));
+      return { data: items.map(row => {
+        const aggregate = counts.get(row.id);
+        return topicDto(row, null, aggregate?.channelCount ?? 0, aggregate?.agentCount ?? 0, activities.get(row.id) ?? null, hints.get(row.id) ?? []);
+      }), page: { has_more: hasMore, next_cursor: hasMore && next ? encodeCursor([query.sort, cursorQuery, asOf.toISOString(), "0", "", next.createdAt.toISOString(), next.id, "0"]) : null } };
+    }
     const rows = await db.select().from(topics).where(and(...conditions));
     const rank = await rankResources(db, "topic", asOf, query.sort);
     const ranked = rows.map(row => ({ row, rank: rank(row.id, row.createdAt) })).sort((a, b) => compareRanked(a.rank, b.rank, query.sort));
@@ -237,6 +271,29 @@ export async function registerResourceRoutes(app: FastifyInstance, db: Database,
       conditions.push(ilike(channels.name, term)!);
     }
     conditions.push(lte(channels.createdAt, asOf));
+    if (query.sort === "latest") {
+      if (pageCursor) {
+        const createdAt = new Date(pageCursor.createdAt);
+        const olderTuple = or(lt(channels.createdAt, createdAt), and(eq(channels.createdAt, createdAt), lt(channels.id, pageCursor.id)))!;
+        conditions.push(pageCursor.isDefault
+          ? or(eq(channels.isDefault, false), and(eq(channels.isDefault, true), olderTuple))!
+          : and(eq(channels.isDefault, false), olderTuple)!);
+      }
+      const rows = await db.select({ channel: channels, counter: channelCounters })
+        .from(channels).leftJoin(channelCounters, eq(channelCounters.channelId, channels.id))
+        .where(and(...conditions)).orderBy(desc(channels.isDefault), desc(channels.createdAt), desc(channels.id)).limit(limit + 1);
+      const hasMore = rows.length > limit;
+      const items = rows.slice(0, limit);
+      const next = items.at(-1);
+      const counts = items.length ? await db.select({ channelId: channelMembers.channelId, count: sql<number>`count(*)::int` })
+        .from(channelMembers).where(inArray(channelMembers.channelId, items.map(({ channel }) => channel.id))).groupBy(channelMembers.channelId) : [];
+      const countByChannel = new Map(counts.map((item) => [item.channelId, item.count]));
+      const activityRows = items.length ? await db.select({ channelId: messages.channelId, lastActivityAt: sql<Date>`max(${messages.createdAt})` })
+        .from(messages).where(and(inArray(messages.channelId, items.map(({ channel }) => channel.id)), isNull(messages.deletedAt))).groupBy(messages.channelId) : [];
+      const activities = new Map(activityRows.map(row => [row.channelId, normalizeTimestamp(row.lastActivityAt)]));
+      const hints = await getModerationHints(db, "channel", items.map(({ channel }) => ({ id: channel.id, text: channel.name })));
+      return { data: items.map(({ channel, counter }) => ({ ...channelDto(channel, countByChannel.get(channel.id) ?? 0, counter?.lastSeq ?? 0, hints.get(channel.id) ?? []), last_activity_at: activities.get(channel.id)?.toISOString() ?? null })), page: { has_more: hasMore, next_cursor: hasMore && next ? encodeCursor([query.sort, cursorQuery, asOf.toISOString(), "0", "", next.channel.createdAt.toISOString(), next.channel.id, next.channel.isDefault ? "1" : "0"]) : null } };
+    }
     const rows = await db.select({ channel: channels, counter: channelCounters })
       .from(channels).leftJoin(channelCounters, eq(channelCounters.channelId, channels.id))
       .where(and(...conditions));

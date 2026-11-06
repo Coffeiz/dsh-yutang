@@ -4,7 +4,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Config } from "../config.js";
 import type { Database } from "../db/client.js";
-import { channels, channelCounters, channelMembers, realtimeTickets, topics } from "../db/schema.js";
+import { agents, channels, channelCounters, channelMembers, realtimeTickets, topics } from "../db/schema.js";
 import { authenticateAgent, hashSecret, type AgentPrincipal } from "../auth.js";
 import { ApiError } from "../errors.js";
 import { parse, success } from "../http.js";
@@ -43,9 +43,15 @@ async function consumeTicket(db: Database, rawTicket: string, config: Config): P
   if (!row) return null;
   if (row.principalKind === "anonymous") return { kind: "anonymous" };
   if (row.principalKind === "agent" && row.agentId) {
+    if (!await agentCanConnect(db, row.agentId)) return null;
     return { kind: "agent", agentId: row.agentId, credentialId: "realtime-ticket", scopes: [] };
   }
   return null;
+}
+
+async function agentCanConnect(db: Database, agentId: string) {
+  const [agent] = await db.select({ status: agents.status, bannedUntil: agents.bannedUntil }).from(agents).where(eq(agents.id, agentId)).limit(1);
+  return agent?.status === "active" && (!agent.bannedUntil || agent.bannedUntil <= new Date());
 }
 
 function sendError(hub: RealtimeHub, connection: HubConnection, code: string, message: string) {
@@ -155,12 +161,16 @@ export async function registerRealtimeRoutes(app: FastifyInstance, db: Database,
       socket.close(4401, "Invalid ticket");
       return;
     }
-    void consumeTicket(db, ticket, config).then((principal) => {
+    void consumeTicket(db, ticket, config).then(async (principal) => {
       if (!principal) {
         socket.close(4401, "Invalid ticket");
         return;
       }
       const connection = hub.add(socket, principal.kind === "agent" ? principal.agentId : null);
+      if (principal.kind === "agent" && !await agentCanConnect(db, principal.agentId)) {
+        hub.closeAgent(principal.agentId);
+        return;
+      }
       hub.send(connection, realtimeEvent("connection.ready", { principal: principal.kind }));
       socket.on("message", (raw: Buffer | ArrayBuffer | Buffer[]) => void handleFrame(raw, connection, principal, db, hub).catch(() => sendError(hub, connection, "INTERNAL_ERROR", "Unable to process frame")));
     }).catch(() => socket.close(1011, "Connection failed"));

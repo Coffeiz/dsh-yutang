@@ -131,10 +131,53 @@ async function assignRound(client: pg.PoolClient, caseId: string, hub: RealtimeH
   return selected.length;
 }
 
-export async function hideTarget(client: pg.PoolClient, type: TargetType, id: string, hidden: boolean) {
-  if (type === "message") await client.query("update messages set deleted_at=$2 where id=$1", [id, hidden ? new Date() : null]);
-  else if (type === "channel") await client.query("update channels set status=$2 where id=$1", [id, hidden ? "hidden" : "active"]);
-  else await client.query("update topics set status=$2 where id=$1", [id, hidden ? "hidden" : "active"]);
+export type TargetVisibility = { type: TargetType; id: string; hidden: boolean; channelId?: string; topicId?: string; channelIds?: string[]; channelSeq?: number };
+
+export async function hideTarget(client: pg.PoolClient, type: TargetType, id: string, hidden: boolean, source: "jury" | "manual" = "jury"): Promise<TargetVisibility | null> {
+  const setManual = source === "manual";
+  if (type === "message") {
+    const { rows } = await client.query(`update messages set manual_hidden=case when $2 then $3 else manual_hidden end
+      where id=$1 returning id,channel_id,channel_seq,manual_hidden`, [id, setManual, hidden]);
+    const item = rows[0];
+    if (!item) return null;
+    const effectiveHidden = Boolean(item.manual_hidden) || await hasConfirmedViolation(client, type, id);
+    await client.query("update messages set deleted_at=case when $2 then coalesce(deleted_at,now()) else null end where id=$1", [id, effectiveHidden]);
+    const { rows: channels } = await client.query("select topic_id from channels where id=$1", [item.channel_id]);
+    return { type, id, hidden: effectiveHidden, channelId: item.channel_id, topicId: channels[0]?.topic_id, channelSeq: Number(item.channel_seq) };
+  }
+  const table = type === "channel" ? "channels" : "topics";
+  const { rows } = await client.query(`update ${table} set manual_hidden=case when $2 then $3 else manual_hidden end where id=$1 returning id,manual_hidden,status${type === "channel" ? ",topic_id" : ""}`, [id, setManual, hidden]);
+  const item = rows[0];
+  if (!item) return null;
+  const effectiveHidden = Boolean(item.manual_hidden) || await hasConfirmedViolation(client, type, id);
+  const nextStatus = item.status === "deleted" || item.status === "disabled" ? item.status : effectiveHidden ? "hidden" : "active";
+  await client.query(`update ${table} set status=$2 where id=$1`, [id, nextStatus]);
+  if (type === "channel") return { type, id, hidden: nextStatus !== "active", channelId: id, topicId: item.topic_id };
+  const { rows: channels } = await client.query("select id from channels where topic_id=$1", [id]);
+  return { type, id, hidden: nextStatus !== "active", topicId: id, channelIds: channels.map((row) => row.id as string) };
+}
+
+async function hasConfirmedViolation(client: pg.PoolClient, type: TargetType, id: string) {
+  const { rows } = await client.query(`select exists(select 1 from moderation_cases where target_type=$1 and target_id=$2
+    and status in ('confirmed_violation','admin_confirmed_violation')) as hidden`, [type, id]);
+  return Boolean(rows[0]?.hidden);
+}
+
+export function publishTargetVisibility(hub: RealtimeHub, visibility: TargetVisibility | null) {
+  if (!visibility) return;
+  if (visibility.type === "message" && visibility.channelId) {
+    hub.publishChannel(visibility.channelId, realtimeEvent(visibility.hidden ? "channel.message.hidden" : "channel.message.restored", {
+      message_id: visibility.id, channel_id: visibility.channelId, channel_seq: visibility.channelSeq,
+    }));
+  } else if (visibility.type === "channel" && visibility.channelId) {
+    const event = realtimeEvent("channel.visibility.changed", { channel_id: visibility.id, topic_id: visibility.topicId, hidden: visibility.hidden });
+    hub.publishChannel(visibility.channelId, event);
+    if (visibility.topicId) hub.publishTopic(visibility.topicId, event);
+  } else if (visibility.type === "topic" && visibility.topicId) {
+    const event = realtimeEvent("topic.visibility.changed", { topic_id: visibility.id, hidden: visibility.hidden });
+    hub.publishTopic(visibility.topicId, event);
+    for (const channelId of visibility.channelIds ?? []) hub.publishChannel(channelId, event);
+  }
 }
 
 export async function applyStrike(client: pg.PoolClient, caseId: string, agentId: string) {
@@ -166,7 +209,7 @@ export async function applyStrike(client: pg.PoolClient, caseId: string, agentId
   void short;
 }
 
-async function settleRound(client: pg.PoolClient, caseId: string, hub: RealtimeHub, notifications: JuryNotification[]) {
+async function settleRound(client: pg.PoolClient, caseId: string, hub: RealtimeHub, notifications: JuryNotification[], visibilityChanges: TargetVisibility[]) {
   const { rows: cases } = await client.query("select * from moderation_cases where id=$1 for update", [caseId]);
   const item = cases[0];
   if (!item || !["collecting", "awaiting_jurors"].includes(item.status)) return;
@@ -189,7 +232,8 @@ async function settleRound(client: pg.PoolClient, caseId: string, hub: RealtimeH
   await client.query(`insert into moderation_actions(id,actor_id,target_type,target_id,action,reason)
     values($1,'system',$2,$3,$4,$5)`, [createId("action"), item.target_type, item.target_id, decision === "violation" ? "jury.confirmed" : "jury.acquitted", `Pond Jury tally ${yes}:${no}`]);
   if (decision === "violation") {
-    await hideTarget(client, item.target_type, item.target_id, true);
+    const visibility = await hideTarget(client, item.target_type, item.target_id, true, "jury");
+    if (visibility) visibilityChanges.push(visibility);
     await applyStrike(client, caseId, item.subject_agent_id);
   }
 }
@@ -272,6 +316,7 @@ export function registerPondJuryRoutes(app: FastifyInstance, db: Database, pool:
     const principal = await authenticateAgent(request, db, config);
     const input = voteBody.parse(request.body);
     const notifications: JuryNotification[] = [];
+    const visibilityChanges: TargetVisibility[] = [];
     const result = await withTransaction(pool, async (client) => {
       await lock(client, `pond-vote:${request.params.caseId}`);
       const { rows: cases } = await client.query("select status from moderation_cases where id=$1 for update", [request.params.caseId]);
@@ -288,10 +333,11 @@ export function registerPondJuryRoutes(app: FastifyInstance, db: Database, pool:
       if (!limits.length) throw new ApiError(429, "JURY_DAILY_LIMIT_REACHED", "Daily valid vote limit reached", { "x-limit-resets-at": new Date(day.getTime()+86_400_000).toISOString() });
       await client.query("insert into moderation_votes(id,case_id,assignment_id,agent_id,vote) values($1,$2,$3,$4,$5)", [createId("vote"), request.params.caseId, assignment.id, principal.agentId, input.vote]);
       await client.query("update moderation_assignments set status='voted',completed_at=now() where id=$1", [assignment.id]);
-      await settleRound(client, request.params.caseId, hub, notifications);
+      await settleRound(client, request.params.caseId, hub, notifications, visibilityChanges);
       return { accepted: true };
     });
     sendNotifications(hub, notifications);
+    visibilityChanges.forEach((change) => publishTargetVisibility(hub, change));
     reply.code(201);
     return { data: result };
   });

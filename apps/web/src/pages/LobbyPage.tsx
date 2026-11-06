@@ -715,6 +715,8 @@ function App() {
     let attempts = 0;
     let heartbeatTimer: number | undefined;
     let lastHeartbeatAckAt = 0;
+    let syncInProgress = false;
+    let queuedSyncWatermark = 0;
 
     const stopHeartbeat = () => {
       if (heartbeatTimer !== undefined) window.clearInterval(heartbeatTimer);
@@ -723,14 +725,33 @@ function App() {
 
     const syncAfter = async (watermark = Number.MAX_SAFE_INTEGER) => {
       if (!displayChannel || disposed) return;
-      let cursor = latestSeqRef.current;
-      for (let page = 0; page < 20 && cursor < watermark && !disposed; page += 1) {
-        const result = await listMessages(displayChannel.id, { afterSeq: cursor, limit: 100 });
-        if (!result.data.length) break;
-        const ordered = result.data.slice().sort((a, b) => a.channel_seq - b.channel_seq);
-        mergeIncoming(ordered);
-        cursor = latestSeqRef.current;
-        if (!result.page.has_more) break;
+      queuedSyncWatermark = Math.max(queuedSyncWatermark, watermark);
+      if (syncInProgress) return;
+      syncInProgress = true;
+      let canContinue = true;
+      try {
+        while (!disposed && canContinue) {
+          const target = queuedSyncWatermark;
+          let cursor = latestSeqRef.current;
+          let page = 0;
+          for (; page < 20 && cursor < target && !disposed; page += 1) {
+            const result = await listMessages(displayChannel.id, { afterSeq: cursor, limit: 100 });
+            if (!result.data.length) { canContinue = false; break; }
+            const ordered = result.data.slice().sort((a, b) => a.channel_seq - b.channel_seq);
+            mergeIncoming(ordered);
+            cursor = latestSeqRef.current;
+            if (!result.page.has_more) { canContinue = false; break; }
+          }
+          if (!canContinue || cursor >= queuedSyncWatermark || disposed) break;
+          // Yield between bounded batches so a long disconnect does not monopolize the UI thread.
+          await new Promise<void>(resolve => window.setTimeout(resolve, 0));
+        }
+      } finally {
+        syncInProgress = false;
+        if (!disposed && canContinue && latestSeqRef.current < queuedSyncWatermark) {
+          const nextWatermark = queuedSyncWatermark;
+          window.setTimeout(() => { void syncAfter(nextWatermark).catch(() => {}); }, 0);
+        }
       }
     };
 
@@ -774,6 +795,15 @@ function App() {
             socket?.send(JSON.stringify({ type: 'subscribe', channels: [displayChannel.id], topic_activity: [] }));
             return;
           }
+          if (frame.type === 'error' && frame.data && typeof frame.data === 'object' && 'code' in frame.data
+            && frame.data.code === 'SUBSCRIPTION_NOT_ALLOWED') {
+            pendingChannelIdRef.current = null;
+            restorePendingRef.current = false;
+            setSelectedChannel(null);
+            setView('topic');
+            setChannelsRefresh(value => value + 1);
+            return;
+          }
           if (frame.type === 'subscribed') {
             setRealtimeState('connected');
             const watermarks = frame.data && typeof frame.data === 'object' && 'high_watermarks' in frame.data
@@ -794,6 +824,38 @@ function App() {
           if (frame.type === 'channel.message.hidden' && frame.data && typeof frame.data === 'object' && 'message_id' in frame.data) {
             const id = String(frame.data.message_id);
             setMessages(current => current.filter(message => message.id !== id));
+            return;
+          }
+          if (frame.type === 'channel.message.restored' && frame.data && typeof frame.data === 'object' && 'message_id' in frame.data) {
+            const messageId = String(frame.data.message_id);
+            void getMessage(messageId).then(result => {
+              if (displayChannel?.id === result.data.channel_id) mergeIncoming([result.data]);
+            }).catch(() => {});
+            return;
+          }
+          if (frame.type === 'channel.visibility.changed' && frame.data && typeof frame.data === 'object' && 'channel_id' in frame.data) {
+            const data = frame.data as { channel_id: string; hidden?: boolean };
+            if (data.channel_id === displayChannel.id && data.hidden) {
+              pendingChannelIdRef.current = null;
+              restorePendingRef.current = false;
+              setSelectedChannel(null);
+              setView('topic');
+              setChannelsRefresh(value => value + 1);
+            }
+            return;
+          }
+          if (frame.type === 'topic.visibility.changed' && frame.data && typeof frame.data === 'object' && 'topic_id' in frame.data) {
+            const data = frame.data as { topic_id: string; hidden?: boolean };
+            if (displayChannel.topic_id === data.topic_id && data.hidden) {
+              pendingChannelIdRef.current = null;
+              restorePendingRef.current = false;
+              setSelectedTopic(null);
+              setSelectedChannel(null);
+              setView('discovery');
+              commitNavigation({ ...navigationRef.current, view: 'discovery', topicId: null, channelId: null });
+            } else if (displayChannel.topic_id === data.topic_id) {
+              setChannelsRefresh(value => value + 1);
+            }
             return;
           }
           if (frame.type === 'agent.presence.changed' && frame.data && typeof frame.data === 'object' && 'agent_id' in frame.data && 'online' in frame.data) {

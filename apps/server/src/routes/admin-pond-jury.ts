@@ -2,7 +2,8 @@ import type { FastifyInstance } from "fastify";
 import type pg from "pg";
 import { z } from "zod";
 import { createId } from "../ids.js";
-import { applyStrike, hideTarget } from "./pond-jury.js";
+import type { RealtimeHub } from "../realtime/hub.js";
+import { applyStrike, hideTarget, publishTargetVisibility } from "./pond-jury.js";
 
 const targetSchema = z.enum(["topic", "channel", "message"]);
 const decisionSchema = z.object({ decision: z.enum(["violation", "acquittal"]), reason: z.string().trim().min(3).max(1000) });
@@ -14,7 +15,7 @@ async function inTransaction<T>(pool: pg.Pool, fn: (client: pg.PoolClient) => Pr
   finally { client.release(); }
 }
 
-export function registerAdminPondJuryRoutes(app: FastifyInstance, pool: pg.Pool) {
+export function registerAdminPondJuryRoutes(app: FastifyInstance, pool: pg.Pool, hub: RealtimeHub) {
   app.get("/admin/v1/moderation/cases", async (request, reply) => {
     const query = z.object({ status: z.string().max(40).optional(), q: z.string().max(100).optional() }).safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: "Invalid query" });
@@ -63,24 +64,24 @@ export function registerAdminPondJuryRoutes(app: FastifyInstance, pool: pg.Pool)
       [item.id, input.data.decision, input.data.reason, guilty ? "admin_confirmed_violation" : "admin_acquitted"]);
       await client.query(`update moderation_assignments set status='cancelled',completed_at=now()
         where case_id=$1 and status in ('assigned','delivered')`, [item.id]);
+      let visibility: Awaited<ReturnType<typeof hideTarget>> = null;
       if (guilty) {
-        await hideTarget(client, item.target_type, item.target_id, true);
+        visibility = await hideTarget(client, item.target_type, item.target_id, true, "jury");
         await applyStrike(client, item.id, item.subject_agent_id);
       } else {
         await client.query("update agent_strikes set reversed_at=now() where case_id=$1 and reversed_at is null", [item.id]);
         await client.query("update agent_suspensions set revoked_at=now() where case_id=$1 and revoked_at is null", [item.id]);
-        const { rows: otherActive } = await client.query(`select exists(select 1 from moderation_cases where target_type=$1 and target_id=$2
-          and id<>$3 and status in ('confirmed_violation','admin_confirmed_violation')) as active`, [item.target_type, item.target_id, item.id]);
-        if (!otherActive[0]?.active) await hideTarget(client, item.target_type, item.target_id, false);
+        visibility = await hideTarget(client, item.target_type, item.target_id, false, "jury");
         const { rows: activeBans } = await client.query("select max(ends_at) as until from agent_suspensions where agent_id=$1 and revoked_at is null and ends_at>now()", [item.subject_agent_id]);
         await client.query("update agents set banned_until=$2 where id=$1", [item.subject_agent_id, activeBans[0]?.until ?? null]);
       }
       await client.query(`insert into moderation_actions(id,actor_id,target_type,target_id,action,reason)
         values($1,$2,'case',$3,$4,$5)`, [createId("action"), actor, item.id, guilty ? "admin.confirmed_violation" : "admin.acquitted", input.data.reason]);
-      return { case_id: item.id, decision: input.data.decision, status: guilty ? "admin_confirmed_violation" : "admin_acquitted" };
+      return { case_id: item.id, decision: input.data.decision, status: guilty ? "admin_confirmed_violation" : "admin_acquitted", visibility };
     });
     if (!result) return reply.code(404).send({ error: "Case not found" });
-    return result;
+    publishTargetVisibility(hub, result.visibility);
+    return { case_id: result.case_id, decision: result.decision, status: result.status };
   });
 
   app.post("/admin/v1/moderation/actions/hide", async (request, reply) => {
@@ -91,12 +92,13 @@ export function registerAdminPondJuryRoutes(app: FastifyInstance, pool: pg.Pool)
       const table = input.data.target_type === "topic" ? "topics" : input.data.target_type === "channel" ? "channels" : "messages";
       const lookup = await client.query(`select id from ${table} where id=$1`, [input.data.target_id]);
       if (!lookup.rowCount) return false;
-      await hideTarget(client, input.data.target_type, input.data.target_id, input.data.hidden);
+      const visibility = await hideTarget(client, input.data.target_type, input.data.target_id, input.data.hidden, "manual");
       await client.query(`insert into moderation_actions(id,actor_id,target_type,target_id,action,reason)
         values($1,$2,$3,$4,$5,$6)`, [createId("action"), actor, input.data.target_type, input.data.target_id, input.data.hidden ? "admin.hidden" : "admin.restored", input.data.reason]);
-      return true;
+      return visibility;
     });
     if (!result) return reply.code(404).send({ error: "Target not found" });
+    publishTargetVisibility(hub, result);
     return { ok: true };
   });
 }
