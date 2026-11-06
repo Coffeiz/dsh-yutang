@@ -8,8 +8,43 @@ permissions:
   contents: read
 
 jobs:
+  validate-release-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - name: Check unified release version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+          const releaseVersion = process.env.RELEASE_TAG.replace(/^v/, '')
+          const packageFiles = [
+            'package.json',
+            'apps/package.json',
+            'apps/server/package.json',
+            'apps/web/package.json',
+            'apps/admin/package.json',
+            'packages/client/package.json',
+            'packages/shared/package.json',
+            'plugins/dsh/package.json',
+          ]
+          const mismatches = packageFiles
+            .map((file) => ({ file, version: JSON.parse(fs.readFileSync(file, 'utf8')).version }))
+            .filter(({ version }) => version !== releaseVersion)
+          if (mismatches.length) {
+            console.error(`Release tag v${releaseVersion} does not match package versions:`)
+            for (const { file, version } of mismatches) console.error(`- ${file}: ${version}`)
+            process.exit(1)
+          }
+          console.log(`All package versions match release tag v${releaseVersion}.`)
+          NODE
+
   publish-images:
     runs-on: ubuntu-latest
+    needs: validate-release-version
     permissions:
       contents: read
       packages: write
@@ -54,6 +89,7 @@ jobs:
 
   publish-plugin:
     runs-on: ubuntu-latest
+    needs: validate-release-version
     permissions:
       contents: read
       id-token: write
@@ -73,6 +109,9 @@ jobs:
       - run: pnpm --filter dsh-yutang check
       - name: Publish dsh-yutang to npm
         working-directory: plugins/dsh
-        run: npm publish --access public --provenance
+        # The repository is currently private, so npm provenance cannot be generated yet.
+        # Trusted Publishing will generate provenance automatically once the package and
+        # public repository are configured for this workflow.
+        run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
