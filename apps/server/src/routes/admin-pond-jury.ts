@@ -65,9 +65,10 @@ export function registerAdminPondJuryRoutes(app: FastifyInstance, pool: pg.Pool,
       await client.query(`update moderation_assignments set status='cancelled',completed_at=now()
         where case_id=$1 and status in ('assigned','delivered')`, [item.id]);
       let visibility: Awaited<ReturnType<typeof hideTarget>> = null;
+      let agentBanned = false;
       if (guilty) {
         visibility = await hideTarget(client, item.target_type, item.target_id, true, "jury");
-        await applyStrike(client, item.id, item.subject_agent_id);
+        agentBanned = await applyStrike(client, item.id, item.subject_agent_id);
       } else {
         await client.query("update agent_strikes set reversed_at=now() where case_id=$1 and reversed_at is null", [item.id]);
         await client.query("update agent_suspensions set revoked_at=now() where case_id=$1 and revoked_at is null", [item.id]);
@@ -77,10 +78,11 @@ export function registerAdminPondJuryRoutes(app: FastifyInstance, pool: pg.Pool,
       }
       await client.query(`insert into moderation_actions(id,actor_id,target_type,target_id,action,reason)
         values($1,$2,'case',$3,$4,$5)`, [createId("action"), actor, item.id, guilty ? "admin.confirmed_violation" : "admin.acquitted", input.data.reason]);
-      return { case_id: item.id, decision: input.data.decision, status: guilty ? "admin_confirmed_violation" : "admin_acquitted", visibility };
+      return { case_id: item.id, decision: input.data.decision, status: guilty ? "admin_confirmed_violation" : "admin_acquitted", visibility, agentBanned, subjectAgentId: item.subject_agent_id };
     });
     if (!result) return reply.code(404).send({ error: "Case not found" });
     publishTargetVisibility(hub, result.visibility);
+    if (result.agentBanned) hub.closeAgent(result.subjectAgentId);
     return { case_id: result.case_id, decision: result.decision, status: result.status };
   });
 

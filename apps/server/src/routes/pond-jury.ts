@@ -180,15 +180,15 @@ export function publishTargetVisibility(hub: RealtimeHub, visibility: TargetVisi
   }
 }
 
-export async function applyStrike(client: pg.PoolClient, caseId: string, agentId: string) {
+export async function applyStrike(client: pg.PoolClient, caseId: string, agentId: string): Promise<boolean> {
   await client.query("select id from agents where id=$1 for update", [agentId]);
   const { rows: old } = await client.query("select id,reversed_at from agent_strikes where case_id=$1 for update", [caseId]);
-  if (old[0] && !old[0].reversed_at) return;
+  if (old[0] && !old[0].reversed_at) return false;
   if (old[0]) await client.query("update agent_strikes set reversed_at=null,consumed_at=null where case_id=$1", [caseId]);
   else await client.query("insert into agent_strikes(id,agent_id,case_id) values($1,$2,$3)", [createId("strike"), agentId, caseId]);
   const { rows: available } = await client.query(`select id from agent_strikes where agent_id=$1 and consumed_at is null and reversed_at is null
     order by created_at,id for update`, [agentId]);
-  if (available.length < 5) return;
+  if (available.length < 5) return false;
   const now = new Date();
   const shortIds = available.slice(0, 5).map((row) => row.id);
   await client.query("update agent_strikes set consumed_at=$2 where id=any($1::text[])", [shortIds, now]);
@@ -207,9 +207,10 @@ export async function applyStrike(client: pg.PoolClient, caseId: string, agentId
   await client.query(`insert into moderation_actions(id,actor_id,target_type,target_id,action,reason)
     values($1,'system','agent',$2,'strike.applied','Pond Jury confirmed violation')`, [createId("action"), agentId]);
   void short;
+  return Boolean(active[0]?.until);
 }
 
-async function settleRound(client: pg.PoolClient, caseId: string, hub: RealtimeHub, notifications: JuryNotification[], visibilityChanges: TargetVisibility[]) {
+async function settleRound(client: pg.PoolClient, caseId: string, hub: RealtimeHub, notifications: JuryNotification[], visibilityChanges: TargetVisibility[], agentsToClose: string[]) {
   const { rows: cases } = await client.query("select * from moderation_cases where id=$1 for update", [caseId]);
   const item = cases[0];
   if (!item || !["collecting", "awaiting_jurors"].includes(item.status)) return;
@@ -234,7 +235,7 @@ async function settleRound(client: pg.PoolClient, caseId: string, hub: RealtimeH
   if (decision === "violation") {
     const visibility = await hideTarget(client, item.target_type, item.target_id, true, "jury");
     if (visibility) visibilityChanges.push(visibility);
-    await applyStrike(client, caseId, item.subject_agent_id);
+    if (await applyStrike(client, caseId, item.subject_agent_id)) agentsToClose.push(item.subject_agent_id);
   }
 }
 
@@ -317,6 +318,7 @@ export function registerPondJuryRoutes(app: FastifyInstance, db: Database, pool:
     const input = voteBody.parse(request.body);
     const notifications: JuryNotification[] = [];
     const visibilityChanges: TargetVisibility[] = [];
+    const agentsToClose: string[] = [];
     const result = await withTransaction(pool, async (client) => {
       await lock(client, `pond-vote:${request.params.caseId}`);
       const { rows: cases } = await client.query("select status from moderation_cases where id=$1 for update", [request.params.caseId]);
@@ -333,11 +335,12 @@ export function registerPondJuryRoutes(app: FastifyInstance, db: Database, pool:
       if (!limits.length) throw new ApiError(429, "JURY_DAILY_LIMIT_REACHED", "Daily valid vote limit reached", { "x-limit-resets-at": new Date(day.getTime()+86_400_000).toISOString() });
       await client.query("insert into moderation_votes(id,case_id,assignment_id,agent_id,vote) values($1,$2,$3,$4,$5)", [createId("vote"), request.params.caseId, assignment.id, principal.agentId, input.vote]);
       await client.query("update moderation_assignments set status='voted',completed_at=now() where id=$1", [assignment.id]);
-      await settleRound(client, request.params.caseId, hub, notifications, visibilityChanges);
+      await settleRound(client, request.params.caseId, hub, notifications, visibilityChanges, agentsToClose);
       return { accepted: true };
     });
     sendNotifications(hub, notifications);
     visibilityChanges.forEach((change) => publishTargetVisibility(hub, change));
+    for (const agentId of agentsToClose) hub.closeAgent(agentId);
     reply.code(201);
     return { data: result };
   });

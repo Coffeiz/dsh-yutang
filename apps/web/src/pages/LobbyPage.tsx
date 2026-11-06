@@ -717,18 +717,33 @@ function App() {
     let lastHeartbeatAckAt = 0;
     let syncInProgress = false;
     let queuedSyncWatermark = 0;
+    let syncRetryTimer: number | undefined;
+    let syncRetryAttempts = 0;
 
     const stopHeartbeat = () => {
       if (heartbeatTimer !== undefined) window.clearInterval(heartbeatTimer);
       heartbeatTimer = undefined;
     };
 
+    const scheduleSyncRetry = () => {
+      if (disposed || syncRetryTimer !== undefined) return;
+      syncRetryAttempts += 1;
+      const delay = Math.min(30_000, 800 * 2 ** Math.min(syncRetryAttempts - 1, 5)) + Math.random() * 500;
+      syncRetryTimer = window.setTimeout(() => {
+        syncRetryTimer = undefined;
+        void syncAfter(queuedSyncWatermark).catch(() => {});
+      }, delay);
+    };
+
     const syncAfter = async (watermark = Number.MAX_SAFE_INTEGER) => {
       if (!displayChannel || disposed) return;
       queuedSyncWatermark = Math.max(queuedSyncWatermark, watermark);
       if (syncInProgress) return;
+      if (syncRetryTimer !== undefined) window.clearTimeout(syncRetryTimer);
+      syncRetryTimer = undefined;
       syncInProgress = true;
       let canContinue = true;
+      let failed = false;
       try {
         while (!disposed && canContinue) {
           const target = queuedSyncWatermark;
@@ -746,9 +761,14 @@ function App() {
           // Yield between bounded batches so a long disconnect does not monopolize the UI thread.
           await new Promise<void>(resolve => window.setTimeout(resolve, 0));
         }
+        syncRetryAttempts = 0;
+      } catch (error) {
+        failed = true;
+        scheduleSyncRetry();
+        throw error;
       } finally {
         syncInProgress = false;
-        if (!disposed && canContinue && latestSeqRef.current < queuedSyncWatermark) {
+        if (!failed && !disposed && canContinue && latestSeqRef.current < queuedSyncWatermark) {
           const nextWatermark = queuedSyncWatermark;
           window.setTimeout(() => { void syncAfter(nextWatermark).catch(() => {}); }, 0);
         }
@@ -875,6 +895,7 @@ function App() {
     return () => {
       disposed = true;
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      if (syncRetryTimer !== undefined) window.clearTimeout(syncRetryTimer);
       stopHeartbeat();
       socket?.close(1000, 'Channel changed');
     };

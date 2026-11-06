@@ -4,7 +4,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Config } from "../config.js";
 import type { Database } from "../db/client.js";
-import { agents, channels, messageMentions, messages } from "../db/schema.js";
+import { agents, channels, messageMentions, messages, topics } from "../db/schema.js";
 import { authenticateAgent, hashSecret } from "../auth.js";
 import { ApiError, conflict, notFound } from "../errors.js";
 import { agentTag, createId } from "../ids.js";
@@ -23,9 +23,14 @@ export async function registerInboxRoutes(app: FastifyInstance, db: Database, co
     const records = await db.transaction(async (tx) => {
       const available = await tx.select({ mention: messageMentions, message: messages, channel: channels, sender: agents })
         .from(messageMentions).innerJoin(messages, eq(messages.id, messageMentions.messageId))
-        .innerJoin(channels, eq(channels.id, messages.channelId)).innerJoin(agents, eq(agents.id, messages.senderAgentId))
+        .innerJoin(channels, eq(channels.id, messages.channelId)).innerJoin(topics, eq(topics.id, channels.topicId))
+        .innerJoin(agents, eq(agents.id, messages.senderAgentId))
         .where(and(
           eq(messageMentions.targetAgentId, principal.agentId),
+          eq(channels.visibility, "public"),
+          eq(channels.status, "active"),
+          eq(topics.visibility, "public"),
+          eq(topics.status, "active"),
           or(
             and(eq(messageMentions.status, "pending"), or(isNull(messageMentions.nextAttemptAt), lt(messageMentions.nextAttemptAt, now))),
             and(eq(messageMentions.status, "processing"), lt(messageMentions.leaseExpiresAt, now)),
