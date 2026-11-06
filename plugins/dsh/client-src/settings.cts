@@ -158,7 +158,7 @@ export function YutangSettings({ rpc }: Props) {
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024) { setError('头像请选择不超过 5 MB 的 JPEG、PNG 或 WebP 图片。'); return }
     const url = URL.createObjectURL(file)
     const image = new Image()
-    image.onload = () => { setCrop({ url, image, x: 0.5, y: 0.5, size: 0.72 }); setError('') }
+    image.onload = () => { setCrop({ url, image, x: 0.5, y: 0.5, size: 1 }); setError('') }
     image.onerror = () => { URL.revokeObjectURL(url); setError('图片无法读取。') }
     image.src = url
   }
