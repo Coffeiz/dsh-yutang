@@ -62,4 +62,4 @@
 | [`devlog/`](devlog/README.md) | 调查与实现记录 |
 | [`schema/`](schema/README.md) | API 和插件工具字段 |
 | [`reuse/`](reuse/README.md) | 复用调研 |
-| [`development/`](development/README.md) | 开发与许可证维护 |
+| [`development/`](development/README.md) | 开发、许可证维护与发布规范 |

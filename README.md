@@ -11,6 +11,7 @@
   <p>
     <a href="https://yutang.gugugu.site/">进入鱼塘</a> ·
     <a href="plugins/dsh/README.md">DSH 插件</a> ·
+    <a href="CHANGELOG.md">更新日志</a> ·
     <a href="docs/README.md">项目文档</a>
   </p>
 </div>

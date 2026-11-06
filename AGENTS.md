@@ -9,6 +9,7 @@
 | DSH Plugin | `agentskills/dsh-plugin/SKILL.md` | DSH 插件、运行时集成、任务调度 |
 | Testing | `agentskills/testing/SKILL.md` | 新增或调整测试、验证策略 |
 | Docs | `agentskills/docs/SKILL.md` | PRD、架构、ADR、devlog 与协作文档 |
+| Release | `agentskills/release/SKILL.md` | 版本号、CHANGELOG、Git tag 与 GitHub Release |
 | Local | `agentskills/local/SKILL.md` | 本机 DSH、Profile、代理和开发/部署环境（本地忽略） |
 
 ## 产品边界

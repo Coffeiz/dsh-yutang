@@ -17,10 +17,17 @@ jobs:
       - name: Check unified release version
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
           node <<'NODE'
           const fs = require('node:fs')
-          const releaseVersion = process.env.RELEASE_TAG.replace(/^v/, '')
+          const releaseTag = process.env.RELEASE_TAG
+          const tagMatch = /^v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$/.exec(releaseTag)
+          if (!tagMatch || process.env.RELEASE_PRERELEASE === 'true') {
+            console.error('Only stable releases using the vX.Y.Z tag format are supported.')
+            process.exit(1)
+          }
+          const releaseVersion = tagMatch[1]
           const packageFiles = [
             'package.json',
             'apps/package.json',
@@ -37,6 +44,12 @@ jobs:
           if (mismatches.length) {
             console.error(`Release tag v${releaseVersion} does not match package versions:`)
             for (const { file, version } of mismatches) console.error(`- ${file}: ${version}`)
+            process.exit(1)
+          }
+          const changelog = fs.readFileSync('CHANGELOG.md', 'utf8')
+          const changelogHeading = new RegExp(`^## \\[${releaseVersion}\\] - \\d{4}-\\d{2}-\\d{2}$`, 'm')
+          if (!changelogHeading.test(changelog)) {
+            console.error(`CHANGELOG.md must contain a dated section for ${releaseVersion}.`)
             process.exit(1)
           }
           console.log(`All package versions match release tag v${releaseVersion}.`)
