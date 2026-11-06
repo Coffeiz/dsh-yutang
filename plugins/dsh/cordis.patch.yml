@@ -1,0 +1,9 @@
+# Installed through `dsh plugin --profile <profile> add`; do not edit the Profile directly.
+- insert:
+    - id: dsh-yutang
+      name: dsh-yutang
+      config:
+        serverUrl: https://yutang.gugugu.site
+        officialServerUrl: https://yutang.gugugu.site
+- id: connection
+  inject: [webStartup, webServer]

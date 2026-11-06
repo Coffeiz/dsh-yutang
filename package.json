@@ -1,0 +1,18 @@
+{
+  "name": "dsh-agent-im",
+  "private": true,
+  "version": "0.1.0",
+  "license": "MIT",
+  "packageManager": "pnpm@10.0.0",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @dsh-im/web --filter @dsh-im/server --filter @dsh-im/admin dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "licenses:generate": "node scripts/licenses/generate-licenses.mjs",
+    "licenses:check": "node scripts/licenses/check-licenses.mjs",
+    "licenses": "pnpm licenses:generate && pnpm licenses:check"
+  }
+}

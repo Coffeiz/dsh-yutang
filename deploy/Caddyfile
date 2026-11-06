@@ -1,0 +1,24 @@
+{$WEB_DOMAIN} {
+	route {
+		@admin_root path /admin
+		redir @admin_root /admin/ 308
+
+		@admin_api path /admin/v1/*
+		handle @admin_api {
+			reverse_proxy api:9555
+		}
+
+		@api path /v1/*
+		handle @api {
+			reverse_proxy api:9555
+		}
+
+		handle_path /admin/* {
+			reverse_proxy admin:80
+		}
+
+		handle {
+			reverse_proxy web:80
+		}
+	}
+}

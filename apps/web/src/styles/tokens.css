@@ -1,0 +1,151 @@
+/* ProviderList-inspired 3 layer tokens: primitives, semantic roles, components. */
+:root {
+  color-scheme: dark;
+
+  /* Primitive palette */
+  --yt-surface-soft: #202229;
+  --yt-surface-medium: #181a20;
+  --yt-surface-hard: #111318;
+  --yt-ink-soft: #777d8b;
+  --yt-ink-medium: #a2a8b5;
+  --yt-ink-hard: #f2f4f8;
+  --yt-brand-soft: #34415b;
+  --yt-brand-medium: #5686fe;
+  --yt-brand-hard: #7aaaff;
+  --yt-success-soft: #193329;
+  --yt-success-medium: #44bd86;
+  --yt-success-hard: #88dfb4;
+  --yt-presence-online: var(--yt-success-medium);
+  --yt-presence-offline: var(--yt-ink-soft);
+  --yt-presence-unknown: #f2c26f;
+
+  /* Typography and scale, matching ProviderList's five step rhythm */
+  --yt-font-sans: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --yt-font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
+  --yt-space-xs: 4px;
+  --yt-space-sm: 8px;
+  --yt-space-md: 12px;
+  --yt-space-lg: 16px;
+  --yt-space-xl: 32px;
+  --yt-radius-xs: 6px;
+  --yt-radius-sm: 8px;
+  --yt-radius-md: 12px;
+  --yt-radius-lg: 17px;
+  --yt-radius-full: 9999px;
+  --yt-text-xs: 11px;
+  --yt-text-sm: 13px;
+  --yt-text-md: 16px;
+  --yt-text-lg: 23px;
+  --yt-text-xl: 34px;
+  --yt-leading-tight: 1.2;
+  --yt-leading-normal: 1.5;
+  --yt-weight-regular: 400;
+  --yt-weight-medium: 500;
+  --yt-weight-semibold: 600;
+  --yt-weight-bold: 700;
+
+  /* Semantic roles */
+  --yt-bg-canvas: var(--yt-surface-hard);
+  --yt-bg-rail: #111318;
+  --yt-bg-sidebar: #15171c;
+  --yt-bg-panel: #181a20;
+  --yt-bg-raised: #202229;
+  --yt-bg-hover: #252831;
+  --yt-bg-selected: #283142;
+  --yt-bg-input: #101216;
+  --yt-text-primary: var(--yt-ink-hard);
+  --yt-text-secondary: var(--yt-ink-medium);
+  --yt-text-muted: var(--yt-ink-soft);
+  --yt-text-disabled: #686e7b;
+  --yt-text-on-brand: #ffffff;
+  --yt-border-subtle: rgb(225 230 242 / 7%);
+  --yt-border-strong: rgb(225 230 242 / 12%);
+  --yt-accent: var(--yt-brand-medium);
+  --yt-accent-hover: var(--yt-brand-hard);
+  --yt-accent-soft: rgb(86 134 254 / 15%);
+  --yt-status-live: var(--yt-success-medium);
+  --yt-overlay: rgb(5 6 9 / 72%);
+  --yt-shadow-panel: 0 14px 42px rgb(0 0 0 / 20%);
+  --yt-transition: 160ms ease;
+
+  /* Component roles */
+  --yt-rail-width: 68px;
+  --yt-channel-width: 252px;
+  --yt-activity-width: 270px;
+  --yt-header-height: 62px;
+  --yt-message-max: 790px;
+  --yt-focus-ring: 0 0 0 3px rgb(86 134 254 / 38%);
+  --yt-input-height: 38px;
+  --yt-input-padding-x: var(--yt-space-md);
+  --yt-input-radius: var(--yt-radius-sm);
+  --yt-input-bg: var(--yt-bg-input);
+  --yt-input-bg-disabled: var(--yt-bg-panel);
+  --yt-input-text: var(--yt-text-primary);
+  --yt-input-placeholder: var(--yt-text-muted);
+  --yt-input-disabled-text: var(--yt-text-disabled);
+  --yt-input-border: var(--yt-border-subtle);
+  --yt-input-border-focus: rgb(86 134 254 / 55%);
+  --yt-input-border-disabled: var(--yt-border-subtle);
+  --yt-input-focus-shadow: none;
+  --yt-chart-line: var(--yt-brand-hard);
+  --yt-chart-fill: rgb(122 170 255 / 16%);
+  --yt-chart-grid: rgb(255 255 255 / 5%);
+  --yt-chart-tick: var(--yt-text-muted);
+  --yt-chart-tooltip-bg: var(--yt-bg-input);
+  --yt-chart-tooltip-border: var(--yt-border-strong);
+  --yt-select-trigger-bg: var(--yt-bg-raised);
+  --yt-select-trigger-border: var(--yt-border-strong);
+  --yt-select-popup-bg: rgb(27 29 36 / 96%);
+  --yt-select-popup-border: var(--yt-border-strong);
+  --yt-select-popup-shadow: 0 14px 36px rgb(0 0 0 / 38%);
+  --yt-select-option-hover: var(--yt-bg-hover);
+  --yt-select-option-selected: var(--yt-accent-soft);
+  --yt-select-chevron: var(--yt-text-muted);
+
+  /* Markdown content roles */
+  --yt-md-font-size: var(--yt-text-sm);
+  --yt-md-line-height: 1.65;
+  --yt-md-paragraph-gap: 0.55em;
+  --yt-md-heading-line-height: 1.35;
+  --yt-md-heading-1-scale: 1.28;
+  --yt-md-heading-2-scale: 1.16;
+  --yt-md-heading-3-scale: 1.08;
+  --yt-md-heading-color: var(--yt-text-primary);
+  --yt-md-heading-weight: var(--yt-weight-semibold);
+  --yt-md-muted: var(--yt-text-secondary);
+  --yt-md-link: var(--yt-accent-hover);
+  --yt-md-quote-border: var(--yt-brand-hard);
+  --yt-md-quote-bg: rgb(86 134 254 / 6%);
+  --yt-md-inline-code-color: #b9ccff;
+  --yt-md-inline-code-bg: rgb(101 135 231 / 14%);
+  --yt-md-inline-code-padding-y: 1px;
+  --yt-md-inline-code-padding-x: 4px;
+  --yt-md-code-font: var(--yt-font-mono);
+  --yt-md-code-block-bg: #11141a;
+  --yt-md-code-block-border: #2d3341;
+  --yt-md-code-block-color: #d2d8e4;
+  --yt-md-code-header-bg: rgb(86 134 254 / 8%);
+  --yt-md-code-header-border: rgb(86 134 254 / 16%);
+  --yt-md-code-action: var(--yt-text-secondary);
+  --yt-md-code-action-hover: var(--yt-brand-hard);
+  --yt-md-table-border: #343a48;
+  --yt-md-table-head-bg: #212530;
+  --yt-md-table-cell-padding-y: 4px;
+  --yt-md-table-cell-padding-x: 8px;
+  --yt-md-mermaid-bg: #171b23;
+  --yt-md-mermaid-border: #303644;
+  --yt-md-mermaid-text: #e5e8ef;
+  --yt-md-mermaid-line: #aab2c2;
+  --yt-md-mermaid-padding: 10px;
+  --yt-md-mermaid-controls-bg: rgb(24 26 32 / 68%);
+  --yt-md-preview-bg: #101217;
+  --yt-md-preview-border: var(--yt-border-strong);
+  --yt-md-block-radius: var(--yt-radius-sm);
+  --yt-md-block-gap: var(--yt-space-sm);
+  --yt-md-block-padding-y: 9px;
+  --yt-md-block-padding-x: 11px;
+  --yt-md-image-max-height: 280px;
+  --yt-md-math-padding-y: 3px;
+}
+
+* { box-sizing: border-box; }

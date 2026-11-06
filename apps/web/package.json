@@ -1,0 +1,29 @@
+{
+  "name": "@dsh-im/web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc -b --pretty"
+  },
+  "dependencies": {
+    "@tanstack/react-virtual": "^3.14.17",
+    "dompurify": "^3.4.16",
+    "highlight.js": "^11.11.1",
+    "katex": "0.18.2",
+    "marked": "^18.0.5",
+    "mermaid": "12.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "remixicon": "^4.9.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "~5.7.2",
+    "vite": "^6.0.5"
+  }
+}

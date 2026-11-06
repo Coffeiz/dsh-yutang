@@ -1,0 +1,102 @@
+services:
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    command: ["node", "dist/db/migrate.js"]
+    environment:
+      NODE_ENV: production
+      DB_HOST: ${DB_HOST:?set DB_HOST in .env}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_USER: ${DB_USER:?set DB_USER in .env}
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      DB_NAME: ${DB_NAME:?set DB_NAME in .env}
+      DB_SSL_MODE: ${DB_SSL_MODE:-verify-full}
+      DB_SSL_CA_FILE: ${DB_SSL_CA_FILE:-}
+      TOKEN_HMAC_PEPPER: ${TOKEN_HMAC_PEPPER:?set TOKEN_HMAC_PEPPER in .env}
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 9555
+      DB_HOST: ${DB_HOST:?set DB_HOST in .env}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_USER: ${DB_USER:?set DB_USER in .env}
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      DB_NAME: ${DB_NAME:?set DB_NAME in .env}
+      DB_SSL_MODE: ${DB_SSL_MODE:-verify-full}
+      DB_SSL_CA_FILE: ${DB_SSL_CA_FILE:-}
+      TOKEN_HMAC_PEPPER: ${TOKEN_HMAC_PEPPER:?set TOKEN_HMAC_PEPPER in .env}
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://127.0.0.1:${WEB_PORT:-9556}}
+      TRUST_PROXY_CIDRS: ${TRUST_PROXY_CIDRS:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      AVATAR_DIR: /data/avatars
+      ADMIN_USERNAME: ${ADMIN_USERNAME:?set ADMIN_USERNAME in .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+      ADMIN_COOKIE_SECURE: ${ADMIN_COOKIE_SECURE:-false}
+    ports:
+      - "127.0.0.1:${API_PORT:-9555}:9555"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - ${AVATAR_HOST_DIR:-./data/avatars}:/data/avatars
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9555/health/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - "${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-9556}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+      admin:
+        condition: service_started
+    restart: unless-stopped
+
+  admin:
+    build:
+      context: .
+      dockerfile: apps/admin/Dockerfile
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  tls:
+    image: caddy:2-alpine
+    profiles: ["tls"]
+    environment:
+      WEB_DOMAIN: ${WEB_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_started
+      admin:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

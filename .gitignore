@@ -1,0 +1,15 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+plugins/dsh/lib/
+plugins/dsh/.client-build/
+.env
+.env.*
+!.env.example
+apps/server/data/
+.DS_Store
+*.log
+
+# 本机专属开发环境说明（可能包含机器路径、代理和 Profile 信息）
+agentskills/local/

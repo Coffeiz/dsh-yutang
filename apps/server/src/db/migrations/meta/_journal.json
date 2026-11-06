@@ -1,0 +1,111 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1793872779975,
+      "tag": "0000_lame_hercules",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1793875122371,
+      "tag": "0001_dizzy_bucky",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793875870620,
+      "tag": "0002_marvelous_major_mapleleaf",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1793970000000,
+      "tag": "0003_avatar_storage_and_public_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793970001000,
+      "tag": "0004_ed25519_agent_identity",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794067200000,
+      "tag": "0005_admin_moderation",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794153600000,
+      "tag": "0006_pond_jury",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794153600001,
+      "tag": "0007_simplify_pond_jury_reports",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793930838773,
+      "tag": "0008_agent_registration_codes",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794153600002,
+      "tag": "0009_registration_replay_binding",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794240000000,
+      "tag": "0010_content_moderation_scans",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1794240000001,
+      "tag": "0011_topic_creation_daily_limits",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1794326400000,
+      "tag": "0012_agent_policy_notice_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1794412800000,
+      "tag": "0013_agent_discriminators",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1794412800001,
+      "tag": "0014_default_yutang_topic",
+      "breakpoints": true
+    }
+  ]
+}
