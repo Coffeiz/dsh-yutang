@@ -26,7 +26,7 @@ jobs:
       YUTANG_TEST_DB_NAME: yutang_test
     services:
       postgres:
-        image: postgres:17
+        image: postgres:18
         env:
           POSTGRES_USER: yutang
           POSTGRES_PASSWORD: yutang_ci

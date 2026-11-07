@@ -14,7 +14,7 @@
 
 ## 本地开发
 
-需要 **Node.js 24** 和 **PostgreSQL 17**。先启动 PostgreSQL，再从 `apps/` 目录执行：
+需要 **Node.js 24** 和 **PostgreSQL 18**。先启动 PostgreSQL，再从 `apps/` 目录执行：
 
 ```bash
 cd apps
@@ -76,15 +76,17 @@ docker compose up --build -d
 docker compose -f docker-compose.yml -f docker-compose.db.yml up --build -d
 ```
 
+可选数据库容器使用 PostgreSQL 18，数据卷挂载到 `/var/lib/postgresql`，由官方镜像将数据放在版本目录中。PostgreSQL 17 到 18 是主版本升级；已有 17 数据卷不能直接当作 18 数据目录启动。升级前需备份并按 PostgreSQL 的主版本升级流程迁移；本项目不会自动转换数据库数据。此变更只更新项目配置和 CI，不会操作现有数据库。
+
 ### 生产 HTTPS / WSS
 
-生产流量可通过可选 Caddy 入口自动取得和续期 TLS 证书。项目公开域名为 `yutang.gugugu.site`。将 `.env` 中 `WEB_DOMAIN=yutang.gugugu.site`、`WEB_ORIGIN=https://yutang.gugugu.site` 和 `ADMIN_COOKIE_SECURE=true`；确保该域名的 DNS 指向服务器且 TCP 80/443 可到达本机，然后启动：
+生产流量可通过可选 Caddy 入口自动取得和续期 TLS 证书。Web 域名为 `yutang.gugugu.site`，API 域名为 `yutangapi.gugugu.site`。将 `.env` 中 `WEB_DOMAIN=yutang.gugugu.site`、`API_DOMAIN=yutangapi.gugugu.site`、`WEB_ORIGIN=https://yutang.gugugu.site` 和 `ADMIN_COOKIE_SECURE=true`；确保两个域名的 DNS 都指向服务器且 TCP 80/443 可到达本机，然后启动：
 
 ```sh
 docker compose --profile tls up --build -d
 ```
 
-访问 `https://yutang.gugugu.site/`；API 基址为 `https://yutang.gugugu.site/v1`，WebSocket 为 `wss://yutang.gugugu.site/v1/realtime`；Admin 位于同域名 `/admin/`。Caddy 会将 HTTP 重定向到 HTTPS，浏览器实时连接随页面使用 WSS。证书与配置保存在 `caddy_data` / `caddy_config` 卷中。Web/Admin/API 的应用端口固定只绑定本机 loopback，公网入口由 Caddy 的 80/443 负责。`npm run dev` 保持本地 HTTP/WS 开发方式，不受此配置影响。
+访问 `https://yutang.gugugu.site/`；官方 API 基址为 `https://yutangapi.gugugu.site/v1`，WebSocket 为 `wss://yutangapi.gugugu.site/v1/realtime`；Admin 位于 Web 域名的 `/admin/`。Caddy 会将 HTTP 重定向到 HTTPS，浏览器实时连接随页面使用 WSS。证书与配置保存在 `caddy_data` / `caddy_config` 卷中。Web/Admin/API 的应用端口固定只绑定本机 loopback，公网入口由 Caddy 的 80/443 负责。`npm run dev` 保持本地 HTTP/WS 开发方式，不受此配置影响。
 
 本地或内网没有公网域名时，不启用 `tls` profile；Caddy 对 `localhost` 使用本地 CA，其根证书需要在访问浏览器/设备信任后才不会报证书警告。
 
@@ -115,7 +117,8 @@ services:
 | `API_PORT` | 宿主机 API 端口 | `9555` |
 | `WEB_PORT` | Web 与 Admin 共用端口 | `9556` |
 | `WEB_BIND_ADDRESS` | Web/Admin 宿主机绑定地址 | `127.0.0.1` |
-| `WEB_DOMAIN` | TLS 入口域名 | `yutang.gugugu.site` |
+| `WEB_DOMAIN` | Web/Admin TLS 入口域名 | `yutang.gugugu.site` |
+| `API_DOMAIN` | 独立 API/WebSocket TLS 入口域名 | `yutangapi.gugugu.site` |
 | `WEB_ORIGIN` | 浏览器访问 Web 的完整源地址 | `https://yutang.gugugu.site` |
 
 Admin 通过 `/admin/` 访问，不单独发布端口；容器内 API 固定监听 `9555`。只有在受信任的内网部署时，才将 `WEB_BIND_ADDRESS` 设为 `0.0.0.0`。域名变量本身不提供访问控制；未启用 TLS 时仅通过 HTTP 服务，只适合本机或受信网络。
