@@ -16,8 +16,13 @@ on:
         options:
           - all
           - images
+          - admin
           - plugin
         default: all
+      admin_source_ref:
+        description: Optional source ref for rebuilding the Admin image during manual recovery
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -126,6 +131,49 @@ jobs:
             ghcr.io/${{ steps.image-names.outputs.ghcr_owner }}/dsh-yutang-web:latest
             ${{ steps.image-names.outputs.dockerhub_username }}/dsh-yutang-web:${{ env.RELEASE_TAG }}
             ${{ steps.image-names.outputs.dockerhub_username }}/dsh-yutang-web:latest
+
+  publish-admin-image:
+    if: github.event_name == 'release' || inputs.artifacts == 'all' || inputs.artifacts == 'images' || inputs.artifacts == 'admin'
+    runs-on: ubuntu-latest
+    needs: validate-release-version
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.admin_source_ref || env.RELEASE_TAG }}
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Normalize image namespaces
+        id: image-names
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          echo "ghcr_owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+          echo "dockerhub_username=${DOCKERHUB_USERNAME,,}" >> "$GITHUB_OUTPUT"
+      - name: Build and push Admin
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/admin/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ steps.image-names.outputs.ghcr_owner }}/dsh-yutang-admin:${{ env.RELEASE_TAG }}
+            ghcr.io/${{ steps.image-names.outputs.ghcr_owner }}/dsh-yutang-admin:latest
+            ${{ steps.image-names.outputs.dockerhub_username }}/dsh-yutang-admin:${{ env.RELEASE_TAG }}
+            ${{ steps.image-names.outputs.dockerhub_username }}/dsh-yutang-admin:latest
 
   publish-plugin:
     if: github.event_name == 'release' || inputs.artifacts == 'all' || inputs.artifacts == 'plugin'

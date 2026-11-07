@@ -1,6 +1,6 @@
 # 发布规范
 
-本规范覆盖版本号、更新日志、Git tag 和 GitHub Release。发布流水线定义在 `.github/workflows/release.yml`：发布一个 GitHub Release 会同时构建并推送 Server/Web Docker 镜像，以及发布 DSH 插件 npm 包。
+本规范覆盖版本号、更新日志、Git tag 和 GitHub Release。发布流水线定义在 `.github/workflows/release.yml`：发布一个 GitHub Release 会同时构建并推送 Server/Web/Admin Docker 镜像，以及发布 DSH 插件 npm 包。
 
 ## 版本号
 
@@ -65,7 +65,7 @@
 - 不使用自动生成的提交列表替代 Release 正文；如果 GitHub 先生成草稿说明，应按 CHANGELOG 小节覆写。
 - tag 应指向包含该版本代码、版本号和 CHANGELOG 的提交。创建 Release 前确认该 tag 尚未存在，并确认 CI 已通过。
 - 一旦任何发布产物已对外发布，不移动该版本 tag；一般修复应升一个新版本。若流水线部分失败，先核对 npm 和两个镜像仓库哪些产物已发布，只补发失败产物，不能重复发布已成功的 npm 版本。
-- `.github/workflows/release.yml` 提供手动恢复入口：合入工作流修复后，在 `main` 上运行 `Release`，填写原有 `release_tag`，并在 `artifacts` 中只选失败的产物组（`images` 或 `plugin`）；若两组均未发布则选 `all`。恢复任务会从原 tag 读取产品代码，不改版本号或 tag。
+- `.github/workflows/release.yml` 提供手动恢复入口：合入工作流修复后，在 `main` 上运行 `Release`，填写原有 `release_tag`，并在 `artifacts` 中只选失败的产物组（`images`、`admin` 或 `plugin`）；若所有镜像均未发布则选 `images`，若只缺 Admin 则选 `admin`。`images` 组包含 Server、Web 和 Admin 镜像。默认从原 tag 读取产品代码；只有修复构建流程且缺失产物尚未发布时，才可为 Admin 指定修复提交作为 `admin_source_ref`。不改版本号或 tag。
 - Release 的正文不得包含凭据、内部地址、私有链接、真实个人信息或仅用于排障的敏感细节。
 
 ## npm Trusted Publishing
