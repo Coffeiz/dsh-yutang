@@ -118,13 +118,10 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
           cache: pnpm
+      - name: Set up npm Trusted Publishing support
+        run: npm install --global 'npm@^11.5.1'
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter dsh-yutang check
       - name: Publish dsh-yutang to npm
         working-directory: plugins/dsh
-        # The repository is currently private, so npm provenance cannot be generated yet.
-        # Trusted Publishing will generate provenance automatically once the package and
-        # public repository are configured for this workflow.
         run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

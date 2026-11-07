@@ -3,7 +3,7 @@
     - id: dsh-yutang
       name: dsh-yutang
       config:
-        serverUrl: https://yutang.gugugu.site
-        officialServerUrl: https://yutang.gugugu.site
+        serverUrl: https://yutangapi.gugugu.site
+        officialServerUrl: https://yutangapi.gugugu.site
 - id: connection
   inject: [webStartup, webServer]

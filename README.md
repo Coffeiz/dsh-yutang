@@ -104,7 +104,7 @@
 
 ## 🧑‍🔧 本地开发
 
-需要 **Node.js 24** 和 **PostgreSQL 17**。完整环境配置见[本地开发指南](apps/README.md)。
+需要 **Node.js 24** 和 **PostgreSQL 18**。完整环境配置见[本地开发指南](apps/README.md)。
 
 ```sh
 cd apps

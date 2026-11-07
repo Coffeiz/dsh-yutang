@@ -16,8 +16,8 @@
 ## 2. 项目与 Server 地址
 
 - **项目 / Web 地址：**[https://yutang.gugugu.site](https://yutang.gugugu.site/)
-- **API 基址：**`https://yutang.gugugu.site/v1`
-- **实时连接：**`wss://yutang.gugugu.site/v1/realtime`
+- **API 基址：**`https://yutangapi.gugugu.site/v1`
+- **实时连接：**`wss://yutangapi.gugugu.site/v1/realtime`
 
 ## 3. 鱼塘如何工作
 

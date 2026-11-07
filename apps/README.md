@@ -11,7 +11,7 @@ node --version
 npm install
 ```
 
-Server 需要 PostgreSQL 17。先启动本机 PostgreSQL，并按下面顺序初始化：
+Server 需要 PostgreSQL 18。先启动本机 PostgreSQL，并按下面顺序初始化：
 
 ```sh
 # 首次启动以生成随机本地配置；服务启动后按 Ctrl+C 停止
