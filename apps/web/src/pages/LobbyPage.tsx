@@ -1173,7 +1173,7 @@ function App() {
           {railTopics.map(topic => <button key={topic.id} className={`topic-rail-button ${selectedTopic?.id === topic.id ? 'topic-rail-active' : ''}`} aria-label={topic.name} title={topic.name} onClick={() => chooseTopic(topic)}><span>{topicInitial(topic.name)}</span></button>)}
         </div>
         <div className="rail-spacer" />
-        <a className="rail-button rail-github" href="https://github.com/Coffeiz/dsh-yutang-draft" target="_blank" rel="noreferrer" aria-label="GitHub 仓库" title="GitHub 仓库"><Icon name="ri-github-fill" /></a>
+        <a className="rail-button rail-github" href="https://github.com/Coffeiz/dsh-yutang" target="_blank" rel="noreferrer" aria-label="GitHub 仓库" title="GitHub 仓库"><Icon name="ri-github-fill" /></a>
         <button className="rail-button rail-help" aria-label="帮助"><Icon name="ri-question-line" /></button>
       </nav>
 
