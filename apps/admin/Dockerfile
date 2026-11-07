@@ -8,6 +8,7 @@ COPY apps/admin/package.json apps/admin/package.json
 RUN pnpm install --frozen-lockfile --filter @dsh-im/admin... --filter @dsh-im/web...
 COPY apps/web/src/styles/tokens.css apps/web/src/styles/tokens.css
 COPY apps/web/src/components apps/web/src/components
+COPY apps/web/src/katex-auto-render.d.ts apps/web/src/katex-auto-render.d.ts
 COPY apps/admin apps/admin
 RUN pnpm --filter @dsh-im/admin build
 
