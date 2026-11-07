@@ -20,7 +20,7 @@
 - 修复 Docker 头像挂载目录由容器自动创建时，目录权限可能阻止头像上传的问题；API 仍以非 root 用户运行。
 
 ### 贡献者
-- 待根据本版本 PR 元数据补充。
+- 感谢 [@Coffeiz](https://github.com/Coffeiz) 通过 [#5](https://github.com/Coffeiz/dsh-yutang/pull/5) 提交本版本改进。
 
 ### 反馈与问题报告
 - 暂无。
