@@ -52,7 +52,7 @@ npm run agent:key:bind --workspace=@dsh-im/server -- --owner-id <existing-user-i
 
 ## Docker Compose
 
-默认 Compose 连接外部 PostgreSQL。也可叠加配置启动 PostgreSQL 容器。
+默认 Compose 只启动迁移、API、Web 和 Admin，并连接外部 PostgreSQL；仓库不提供数据库容器或服务器专用的镜像源 Compose 文件。
 
 ### 持久化头像
 
@@ -68,16 +68,6 @@ Server 头像默认保存在宿主机 `./data/avatars`，容器内路径为 `/da
 docker compose up --build -d
 ```
 
-### 使用 Compose 内置 PostgreSQL
-
-将 `.env` 中的 `DB_HOST` 设为 `db`，并填写 `DB_PORT`、`DB_USER`、`DB_PASSWORD` 和 `DB_NAME`。`DB_PASSWORD` 也作为 PostgreSQL 容器的初始化密码，无需对特殊字符做 URL 编码。
-
-```sh
-docker compose -f docker-compose.yml -f docker-compose.db.yml up --build -d
-```
-
-可选数据库容器使用 PostgreSQL 18，数据卷挂载到 `/var/lib/postgresql`，由官方镜像将数据放在版本目录中。PostgreSQL 17 到 18 是主版本升级；已有 17 数据卷不能直接当作 18 数据目录启动。升级前需备份并按 PostgreSQL 的主版本升级流程迁移；本项目不会自动转换数据库数据。此变更只更新项目配置和 CI，不会操作现有数据库。
-
 ### 生产 HTTPS / WSS
 
 生产流量可通过可选 Caddy 入口自动取得和续期 TLS 证书。Web 域名为 `yutang.gugugu.site`，API 域名为 `yutangapi.gugugu.site`。将 `.env` 中 `WEB_DOMAIN=yutang.gugugu.site`、`API_DOMAIN=yutangapi.gugugu.site`、`WEB_ORIGIN=https://yutang.gugugu.site` 和 `ADMIN_COOKIE_SECURE=true`；确保两个域名的 DNS 都指向服务器且 TCP 80/443 可到达本机，然后启动：
@@ -92,7 +82,7 @@ docker compose --profile tls up --build -d
 
 ### PostgreSQL TLS
 
-直接运行 Server 时，`DB_SSL_MODE` 默认 `disable`，保持本机开发连接不变。Docker Compose 默认连接外部 PostgreSQL，并默认使用 `verify-full` 校验证书链和主机名；若叠加 `docker-compose.db.yml` 使用同一 Compose 网络内的 PostgreSQL，会显式关闭 TLS。外部数据库如使用私有 CA，可将 CA 文件只读挂载到 `api` 和 `migrate` 容器，并设置 `DB_SSL_CA_FILE` 为容器内路径。`require` 只加密连接、不验证服务端证书，不建议作为公网数据库的首选。迁移服务和 API 使用相同 TLS 设置。
+直接运行 Server 时，`DB_SSL_MODE` 默认 `disable`，保持本机开发连接不变。Docker Compose 默认连接外部 PostgreSQL，并默认使用 `verify-full` 校验证书链和主机名。外部数据库如使用私有 CA，可将 CA 文件只读挂载到 `api` 和 `migrate` 容器，并设置 `DB_SSL_CA_FILE` 为容器内路径。`require` 只加密连接、不验证服务端证书，不建议作为公网数据库的首选。迁移服务和 API 使用相同 TLS 设置。
 
 例：在自定义 Compose override 中将数据库 CA 挂载到两个服务：
 
