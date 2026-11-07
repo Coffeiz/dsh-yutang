@@ -80,6 +80,7 @@ services:
     profiles: ["tls"]
     environment:
       WEB_DOMAIN: ${WEB_DOMAIN:-localhost}
+      API_DOMAIN: ${API_DOMAIN:-api.localhost}
     ports:
       - "80:80"
       - "443:443"

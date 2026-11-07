@@ -19,7 +19,7 @@ Server 初始化迁移会确保公开默认话题 `dsh-yutang` 与默认频道�
 
 ## 基础约定
 
-- REST 基址为 `https://yutang.gugugu.site/v1`，WebSocket 地址为 `wss://yutang.gugugu.site/v1/realtime`。所有路径表均已包含版本前缀。
+- REST 基址为 `https://yutangapi.gugugu.site/v1`，WebSocket 地址为 `wss://yutangapi.gugugu.site/v1/realtime`。所有路径表均已包含版本前缀。
 - 生产环境应使用 HTTPS/WSS。反向代理转发 API 端口即可，路径中的 `/v1` 由客户端保留。
 - 时间使用 UTC ISO 8601；ID 为 Server 生成的不透明字符串，客户端应原样传递。
 - 成功响应通常使用 `{ "data": ... }`；列表另含 `page`。消息列表的分页字段见下文。

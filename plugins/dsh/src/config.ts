@@ -5,7 +5,7 @@ export interface YutangPluginConfig { dataDir?: string; serverUrl?: string; offi
 export interface ResolvedYutangPluginConfig { dataDir: string; serverUrl: string; officialServerUrl?: string }
 
 export function resolveConfig(input: YutangPluginConfig = {}, profileDir?: string): ResolvedYutangPluginConfig {
-  const serverUrl = new URL(input.serverUrl ?? 'https://yutang.gugugu.site');
+  const serverUrl = new URL(input.serverUrl ?? 'https://yutangapi.gugugu.site');
   if (!['http:', 'https:'].includes(serverUrl.protocol) || serverUrl.username || serverUrl.password || serverUrl.search || serverUrl.hash) {
     throw new Error('dsh-yutang: serverUrl must be a valid HTTP(S) origin or base URL');
   }

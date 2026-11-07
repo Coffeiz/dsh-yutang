@@ -22,3 +22,7 @@
 		}
 	}
 }
+
+{$API_DOMAIN} {
+	reverse_proxy api:9555
+}

@@ -67,12 +67,14 @@
 - 一旦任何发布产物已对外发布，不复用或移动该版本 tag；修复后升一个新版本。若流水线部分失败，先核对 npm 和两个镜像仓库哪些产物已发布，只补发失败产物，不能重复发布已成功的 npm 版本。
 - Release 的正文不得包含凭据、内部地址、私有链接、真实个人信息或仅用于排障的敏感细节。
 
-## npm 发布凭据
+## npm Trusted Publishing
 
-首次发布使用 npm 细粒度访问令牌：
+插件通过 npm Trusted Publishing 使用 GitHub Actions OIDC 发布，不使用长期 npm 发布令牌：
 
-1. 在 npm 创建有包发布权限的 token。首次发布前包尚不存在时，按 npm 当前要求授予临时所需权限，并设置较短有效期；首次发布成功后撤销临时 token。
-2. 在 GitHub 仓库 **Settings → Secrets and variables → Actions → Repository secrets** 添加 `NPM_TOKEN`。
-3. 发布工作流使用 `npm publish --access public`。仓库公开且 npm 包建立后，建议在 npm 将 `Coffeiz/dsh-yutang`、`.github/workflows/release.yml` 配置为可信发布者；验证 OIDC 发布成功后，移除 `NPM_TOKEN` 和 `NODE_AUTH_TOKEN`。
+1. 在 npm 包设置中将 GitHub Actions 配置为 Trusted Publisher，仓库填写 `Coffeiz/dsh-yutang`，Workflow filename 填 `release.yml`。该名称必须与 `.github/workflows/release.yml` 匹配；无需填写路径或环境名。
+2. 发布任务授予 `id-token: write`，使用 Node.js 24 和 npm `11.5.1` 或更新版本，再运行 `npm publish --access public`。
+3. 新建的 Trusted Publisher 配置须在两天内完成首次成功发布，否则需要重新创建配置。
 
-不得将 npm token 写入仓库、提交、issue、聊天或 Release 正文。token 泄露时立即在 npm 撤销并替换 GitHub secret。
+私有 GitHub 仓库可使用 Trusted Publishing，但 npm 不会为私有仓库生成 provenance。仓库公开后，OIDC 发布会自动生成 provenance。发布权限由 npm Trusted Publisher 配置和 GitHub OIDC 工作流共同限制；不得添加或传递 `NPM_TOKEN` / `NODE_AUTH_TOKEN`。
+
+详见 [npm Trusted Publishing 文档](https://docs.npmjs.com/trusted-publishers/)。
