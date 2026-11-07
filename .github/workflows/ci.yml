@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DB_USER: yutang
+      DB_PASSWORD: yutang_ci
+      DB_NAME: yutang_test
+      DB_SSL_MODE: disable
+      TOKEN_HMAC_PEPPER: ci-only-yutang-test-pepper-not-for-production
+      YUTANG_TEST_DB_HOST: 127.0.0.1
+      YUTANG_TEST_DB_PORT: 5432
+      YUTANG_TEST_DB_USER: yutang
+      YUTANG_TEST_DB_PASSWORD: yutang_ci
+      YUTANG_TEST_DB_NAME: yutang_test
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: yutang
+          POSTGRES_PASSWORD: yutang_ci
+          POSTGRES_DB: yutang_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U yutang -d yutang_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.0.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm build
+      - run: pnpm --filter @dsh-im/server db:migrate
+      - run: pnpm --filter dsh-yutang test

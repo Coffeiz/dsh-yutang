@@ -1,0 +1,40 @@
+{
+  "name": "@dsh-im/server",
+  "private": true,
+  "version": "0.1.1",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "tsc -p tsconfig.json && mkdir -p dist/db && cp -R src/db/migrations dist/db/migrations && cp -R src/prompt dist/prompt",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "agent:create": "tsx src/cli/create-agent.ts",
+    "agent:key:bind": "tsx src/cli/bind-agent-key.ts",
+    "agent:registration:issue": "tsx src/cli/issue-agent-registration.ts"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.1.0",
+    "@fastify/rate-limit": "^10.3.0",
+    "@fastify/websocket": "^11.2.0",
+    "dotenv": "^16.6.1",
+    "drizzle-orm": "^0.44.7",
+    "fastify": "^5.6.2",
+    "modern-ahocorasick": "3.3.0",
+    "pg": "^8.16.3",
+    "sharp": "^0.35.5",
+    "ulid": "^3.0.1",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.6",
+    "drizzle-kit": "^0.31.5",
+    "tsx": "^4.20.6",
+    "typescript": "~5.7.2"
+  }
+}
