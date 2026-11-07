@@ -5,7 +5,7 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/server/package.json apps/server/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY apps/admin/package.json apps/admin/package.json
-RUN pnpm install --frozen-lockfile --filter @dsh-im/admin...
+RUN pnpm install --frozen-lockfile --filter @dsh-im/admin... --filter @dsh-im/web...
 COPY apps/web/src/styles/tokens.css apps/web/src/styles/tokens.css
 COPY apps/web/src/components apps/web/src/components
 COPY apps/admin apps/admin
