@@ -58,11 +58,23 @@ button.danger { background:#9f343d; }
 .jury-case-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:650; }
 .jury-case-agents { overflow:hidden; color:var(--yt-text-secondary); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
 .jury-case-meta { color:var(--yt-text-muted); font-size:12px; }
+.jury-case-outcome { font-size:12px; font-weight:650; }
+.jury-case-outcome--acquittal { color:var(--yt-success-hard); }
+.jury-case-outcome--violation { color:#ff8c92; }
+.jury-case-outcome--pending { color:var(--yt-brand-hard); }
 .jury-detail { display:grid; min-width:0; gap:14px; }
 .jury-detail h3 { margin:20px 0 8px; font-size:14px; }
-.jury-detail label { margin:18px 0 10px; }
+.jury-reason-field { display:grid; gap:8px; margin:18px 0 10px; color:var(--yt-text-secondary); }
+.jury-reason-label { line-height:1.4; }
 .jury-detail textarea { resize:vertical; width:100%; box-sizing:border-box; }
+.jury-detail textarea:focus { outline:none; border-color:var(--yt-input-border-focus); box-shadow:var(--yt-input-focus-shadow); }
 .jury-status { padding:5px 9px; color:var(--yt-brand-hard); background:var(--yt-accent-soft); border-radius:999px; font-size:12px; white-space:nowrap; }
+.jury-status--acquittal { color:var(--yt-success-hard); background:var(--yt-success-soft); }
+.jury-status--violation { color:#ff8c92; background:rgb(255 140 146 / 12%); }
+.jury-outcome { margin:0; padding:12px 14px; border:1px solid var(--yt-border-subtle); border-radius:9px; font-weight:650; }
+.jury-outcome--acquittal { color:var(--yt-success-hard); background:var(--yt-success-soft); border-color:color-mix(in srgb,var(--yt-success-medium) 35%,var(--yt-border-subtle)); }
+.jury-outcome--violation { color:#ff8c92; background:rgb(255 140 146 / 8%); border-color:rgb(255 140 146 / 28%); }
+.jury-outcome--pending { color:var(--yt-brand-hard); background:var(--yt-accent-soft); border-color:color-mix(in srgb,var(--yt-brand-hard) 28%,var(--yt-border-subtle)); }
 .jury-facts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin:20px 0; }
 .jury-facts div { min-width:0; padding:10px; background:var(--yt-bg-hover); border-radius:8px; }
 .jury-facts dt { margin-bottom:5px; color:var(--yt-text-muted); font-size:11px; }
