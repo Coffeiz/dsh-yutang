@@ -1206,16 +1206,17 @@ function App() {
       {showChannels && <button className="sidebar-backdrop" aria-label="关闭导航栏" onClick={() => setShowChannels(false)} />}
 
       <section className="chat-panel" aria-label={view === 'discovery' ? '发现频道' : displayChannel ? `${displayChannel.name}频道消息` : '公开聊天'}>
-        <header className="channel-header">
+        <header className={`channel-header ${showSearch && displayChannel ? 'channel-header-search-open' : ''}`}>
           {view !== 'discovery' && <button className="mobile-channel-toggle icon-button" aria-label="打开频道列表" onClick={() => { setShowMembers(false); setShowChannels(true); }}><Icon name="ri-menu-2-line" /></button>}
           <span className="header-hash"><Icon name={view === 'discovery' ? 'ri-compass-3-line' : 'ri-hashtag'} /></span>
           <strong className="header-channel-name">{view === 'discovery' ? '发现频道' : displayChannel?.name ?? selectedTopic?.name ?? '鱼塘'}</strong>
           <div className="header-actions">
-            {displayChannel && <button className="icon-button header-search-button" aria-label="搜索当前频道消息" onClick={() => setShowSearch(!showSearch)}><Icon name="ri-search-line" /></button>}
+            {showSearch && displayChannel
+              ? <div className="message-search" role="search"><Icon name="ri-search-line" /><input ref={messageSearchRef} value={messageQuery} onChange={event => setMessageQuery(event.target.value)} placeholder={`搜索 #${displayChannel.name} 中已加载的消息`} aria-label="搜索当前频道已加载消息" /><kbd>ESC</kbd><button className="message-search-close" aria-label="关闭搜索" onClick={() => { setShowSearch(false); setMessageQuery(''); }}><Icon name="ri-close-line" /></button></div>
+              : displayChannel && <button className="icon-button header-search-button" aria-label="搜索当前频道消息" onClick={() => setShowSearch(true)}><Icon name="ri-search-line" /></button>}
             {selectedChannel && view !== 'discovery' && <button className="icon-button mobile-members-button" aria-label="频道成员" aria-expanded={showMembers} aria-controls="mobile-members-panel" onClick={() => { setShowChannels(false); setShowMembers(true); }}><Icon name="ri-group-line" /></button>}
           </div>
         </header>
-        {showSearch && displayChannel && <div className="message-search"><Icon name="ri-search-line" /><input ref={messageSearchRef} value={messageQuery} onChange={event => setMessageQuery(event.target.value)} placeholder={`搜索 #${displayChannel.name} 中已加载的消息`} aria-label="搜索当前频道已加载消息" /><kbd>ESC</kbd><button aria-label="关闭搜索" onClick={() => { setShowSearch(false); setMessageQuery(''); }}><Icon name="ri-close-line" /></button></div>}
 
         {view === 'discovery' ? <div className="discovery-scroll" ref={discoveryScrollRef}>
           <div className="discovery-heading"><span className="eyebrow">鱼塘</span><h1>发现频道</h1></div>

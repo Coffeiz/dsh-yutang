@@ -129,15 +129,18 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--yt-
 .channel-header { z-index: 1; display: flex; height: var(--yt-header-height); flex: 0 0 auto; align-items: center; gap: 10px; padding: 0 20px; border-bottom: 1px solid var(--yt-border-subtle); background: rgb(24 26 32 / 96%); }
 .header-hash { display: grid; place-items: center; width: 18px; color: #9198a6; font-size: 17px; }
 .header-channel-name { color: #edf0f6; font-size: 13px; font-weight: 700; }
-.header-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; margin-left: auto; }
+.header-actions { display: flex; min-width: 0; flex: 0 0 auto; align-items: center; gap: 10px; margin-left: auto; }
 .header-search-button { width: 30px; height: 30px; font-size: 16px; }
 .mobile-channel-toggle, .mobile-members-button { display: none; }
-.message-search { z-index: 2; display: flex; position: absolute; top: 10px; right: 58px; width: min(380px, calc(100% - 32px)); height: 42px; align-items: center; gap: 9px; padding: 0 10px; border: 1px solid var(--yt-input-border); border-radius: var(--yt-input-radius); color: var(--yt-text-muted); background: var(--yt-input-bg); box-shadow: var(--yt-shadow-panel); }
-.message-search:focus-within { border-color: var(--yt-input-border-focus); box-shadow: var(--yt-shadow-panel); }
-.message-search input { width: 100%; border: 0; outline: 0; color: var(--yt-input-text); background: transparent; font-size: 12px; }
+.message-search { display: flex; width: min(380px, 42vw); height: 38px; min-width: 0; flex: 0 1 380px; align-items: center; gap: 9px; padding: 0 9px; border: 1px solid var(--yt-input-border); border-radius: var(--yt-input-radius); color: var(--yt-text-muted); background: var(--yt-input-bg); transition: border-color var(--yt-transition), background var(--yt-transition), box-shadow var(--yt-transition); }
+.message-search:focus-within { border-color: var(--yt-input-border-focus); background: var(--yt-bg-raised); box-shadow: var(--yt-input-focus-shadow); }
+.message-search > i { flex: 0 0 auto; font-size: 15px; }
+.message-search input { width: 100%; min-width: 0; border: 0; outline: 0; color: var(--yt-input-text); background: transparent; font-size: 12px; }
 .message-search input::placeholder { color: var(--yt-input-placeholder); }
 .message-search input:focus-visible { box-shadow: none; }
-.message-search > button { display: grid; place-items: center; border: 0; color: #9ba2b2; background: transparent; cursor: pointer; }
+.message-search kbd { padding: 2px 5px; }
+.message-search > button { display: grid; width: 26px; height: 26px; flex: 0 0 auto; place-items: center; padding: 0; border: 0; border-radius: 6px; color: #9ba2b2; background: transparent; cursor: pointer; transition: color var(--yt-transition), background var(--yt-transition); }
+.message-search > button:hover { color: var(--yt-text-primary); background: var(--yt-bg-hover); }
 .chat-scroll { display: flex; position: relative; min-height: 0; flex: 1; flex-direction: column; overflow-y: auto; scrollbar-color: #353943 transparent; scrollbar-width: thin; }
 .chat-history-status { z-index: 2; display: flex; position: sticky; top: 0; height: 0; flex: 0 0 0; align-self: center; justify-content: center; text-align: center; }
 .chat-history-status button { position: relative; margin-top: 8px; padding: 7px 11px; border: 1px solid var(--yt-border-strong); border-radius: 7px; color: var(--yt-text-secondary); background: var(--yt-bg-raised); font-size: 11px; cursor: pointer; }
@@ -279,6 +282,10 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--yt-
   .header-hash { display: none; }
   .header-channel-name { font-size: 13px; }
   .header-actions { gap: 4px; }
+  .channel-header-search-open .header-channel-name { display: none; }
+  .channel-header-search-open .header-actions { flex: 1 1 auto; }
+  .channel-header-search-open .message-search { width: auto; height: 38px; min-width: 0; flex: 1 1 auto; }
+  .channel-header-search-open .message-search kbd { display: none; }
   .discovery-scroll { padding: 34px 18px 42px; }
   .discovery-heading h1 { font-size: 22px; }
   .stream-date { padding: 0 19px; }
