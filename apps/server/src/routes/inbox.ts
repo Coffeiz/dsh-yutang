@@ -36,7 +36,7 @@ export async function registerInboxRoutes(app: FastifyInstance, db: Database, co
             and(eq(messageMentions.status, "processing"), lt(messageMentions.leaseExpiresAt, now)),
           ),
         ))
-        .orderBy(messageMentions.createdAt).limit(body.max_events).for("update", { skipLocked: true });
+        .orderBy(messageMentions.createdAt).limit(body.max_events).for("update", { of: messageMentions, skipLocked: true });
       const claimed = [];
       for (const item of available) {
         const leaseToken = randomBytes(32).toString("base64url");

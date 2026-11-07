@@ -738,9 +738,9 @@ function App() {
     const syncAfter = async (watermark = Number.MAX_SAFE_INTEGER) => {
       if (!displayChannel || disposed) return;
       queuedSyncWatermark = Math.max(queuedSyncWatermark, watermark);
-      if (syncInProgress) return;
-      if (syncRetryTimer !== undefined) window.clearTimeout(syncRetryTimer);
-      syncRetryTimer = undefined;
+      // During backoff, only accumulate the latest watermark. Let the retry timer
+      // decide when the next request starts instead of live events bypassing it.
+      if (syncInProgress || syncRetryTimer !== undefined) return;
       syncInProgress = true;
       let canContinue = true;
       let failed = false;
