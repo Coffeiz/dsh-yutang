@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, type FormEvent, type PointerEvent } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type FormEvent, type PointerEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import '../../web/src/styles/tokens.css';
 import './style.css';
@@ -26,6 +26,35 @@ function evidenceRecord(value: unknown): JuryEvidence {
 
 function agentLabel(name: string | undefined, id: string) {
   return name?.trim() ? name : id;
+}
+
+function decisionLabel(decision: string | null) {
+  if (decision === 'violation') return '违规';
+  if (decision === 'acquittal') return '无罪';
+  return decision ?? '尚未判定';
+}
+
+function caseStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    awaiting_jurors: '等待陪审员', collecting: '投票中', admin_review: '等待管理员复核',
+    confirmed_violation: '陪审团判定违规', acquitted: '陪审团判定无罪',
+    admin_confirmed_violation: '管理员最终判定违规', admin_acquitted: '管理员最终判定无罪',
+  };
+  return labels[status] ?? status;
+}
+
+function caseOutcome(item: JuryCase) {
+  if (item.admin_decision) return `管理员最终判定：${decisionLabel(item.admin_decision)}`;
+  if (item.auto_decision && item.status === 'admin_review') return `陪审团初步判定：${decisionLabel(item.auto_decision)}，等待管理员最终判定`;
+  if (item.auto_decision) return `陪审团最终判定：${decisionLabel(item.auto_decision)}`;
+  return caseStatusLabel(item.status);
+}
+
+function caseOutcomeTone(item: JuryCase) {
+  const decision = item.admin_decision ?? item.auto_decision;
+  if (decision === 'violation') return 'violation';
+  if (decision === 'acquittal') return 'acquittal';
+  return 'pending';
 }
 
 function AgentIdentity({ name, id }: { name?: string; id: string }) {
@@ -70,9 +99,12 @@ function ModerationPage({ onLogout }: { onLogout: () => void }) {
   const [selected, setSelected] = useState<Record<string, unknown> | null>(null);
   const [selectedId, setSelectedId] = useState('');
   const [reason, setReason] = useState('');
+  const [reasonError, setReasonError] = useState('');
+  const reasonRef = useRef<HTMLTextAreaElement>(null);
   const [filter, setFilter] = useState('');
   const [query, setQuery] = useState('');
   const [error, setError] = useState('');
+  const [actionError, setActionError] = useState('');
   const [busy, setBusy] = useState(false);
   async function loadCases() {
     const params = new URLSearchParams(); if (filter) params.set('status', filter); if (query) params.set('q', query);
@@ -83,6 +115,7 @@ function ModerationPage({ onLogout }: { onLogout: () => void }) {
   }
   async function loadCase(id: string) {
     setSelectedId(id); setSelected(null);
+    setReasonError(''); setActionError(''); setReason('');
     const response = await fetch(`/admin/v1/moderation/cases/${encodeURIComponent(id)}`, { credentials: 'same-origin', cache: 'no-store' });
     if (response.status === 401) { onLogout(); return; }
     if (!response.ok) throw new Error('案件详情读取失败');
@@ -94,25 +127,40 @@ function ModerationPage({ onLogout }: { onLogout: () => void }) {
     refresh(); const timer = window.setInterval(refresh, 30_000);
     return () => { active = false; window.clearInterval(timer); };
   }, [filter, query]);
+  function requireReason() {
+    if (reason.trim().length >= 3) {
+      setReasonError('');
+      return true;
+    }
+    setReasonError('请填写至少 3 个字符的处置理由。');
+    reasonRef.current?.focus();
+    return false;
+  }
   async function decide(decision: 'violation' | 'acquittal') {
-    if (!selectedId || reason.trim().length < 3) { setError('请填写至少 3 个字符的处置理由'); return; }
+    setActionError('');
+    if (!selectedId) { setActionError('请先选择案件。'); return; }
+    if (!requireReason()) return;
     setBusy(true); setError('');
     try {
       const response = await fetch(`/admin/v1/moderation/cases/${encodeURIComponent(selectedId)}/decision`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ decision, reason }) });
-      if (!response.ok) throw new Error('案件判定失败');
-      setReason(''); await Promise.all([loadCase(selectedId), loadCases()]);
-    } catch (err) { setError(err instanceof Error ? err.message : '操作失败'); }
+      if (response.status === 401) { onLogout(); return; }
+      if (!response.ok) throw new Error((await response.json() as { error?: string }).error || '案件判定失败');
+      setReason(''); setReasonError(''); await Promise.all([loadCase(selectedId), loadCases()]);
+    } catch (err) { setActionError(err instanceof Error ? err.message : '操作失败'); }
     finally { setBusy(false); }
   }
   async function hideTarget(hidden: boolean) {
     const item = selected?.case as JuryCase | undefined;
-    if (!item || reason.trim().length < 3) { setError('请填写至少 3 个字符的操作理由'); return; }
+    setActionError('');
+    if (!item) { setActionError('请先选择案件。'); return; }
+    if (!requireReason()) return;
     setBusy(true); setError('');
     try {
       const response = await fetch('/admin/v1/moderation/actions/hide', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target_type: item.target_type, target_id: item.target_id, hidden, reason }) });
-      if (!response.ok) throw new Error('内容处置失败');
-      setReason(''); await loadCase(item.id);
-    } catch (err) { setError(err instanceof Error ? err.message : '操作失败'); }
+      if (response.status === 401) { onLogout(); return; }
+      if (!response.ok) throw new Error((await response.json() as { error?: string }).error || '内容处置失败');
+      setReason(''); setReasonError(''); await loadCase(item.id);
+    } catch (err) { setActionError(err instanceof Error ? err.message : '操作失败'); }
     finally { setBusy(false); }
   }
   const caseData = selected?.case as JuryCase | undefined;
@@ -122,7 +170,7 @@ function ModerationPage({ onLogout }: { onLogout: () => void }) {
   const channelContextRecorded = Object.prototype.hasOwnProperty.call(caseEvidence, 'channel_previous_message');
   const agentContextRecorded = Object.prototype.hasOwnProperty.call(caseEvidence, 'agent_previous_message');
   const sameContextMessage = Boolean(channelPrevious) && evidenceRecord(channelPrevious).id === evidenceRecord(agentPrevious).id;
-  return <>{error && <p role="alert" className="error">{error}</p>}<div className="jury-layout"><section className="panel jury-list"><div className="panel-head"><div><h2>案件</h2><p>{cases.length} 条记录，包含待审核和已结案案件</p></div></div><div className="jury-filters"><input aria-label="搜索案件" placeholder="搜索案件、目标或 Agent ID" value={query} onChange={event => setQuery(event.target.value)} /><div className="jury-status-filter"><SelectPopover label="案件状态" value={filter} onChange={setFilter} options={[{value:"",label:"全部状态"},{value:"awaiting_jurors",label:"等待陪审员"},{value:"collecting",label:"投票中"},{value:"admin_review",label:"等待管理员复核"},{value:"confirmed_violation",label:"陪审团判定违规"},{value:"acquitted",label:"陪审团判定无罪"},{value:"admin_confirmed_violation",label:"管理员判定违规"},{value:"admin_acquitted",label:"管理员判定无罪"}]} /></div></div>{cases.length ? <div className="jury-case-list">{cases.map(item => <button key={item.id} className={`jury-case-item ${selectedId === item.id ? 'selected' : ''}`} onClick={() => { void loadCase(item.id).catch(err => setError(err instanceof Error ? err.message : '读取失败')); }}><span className="jury-case-title">{item.target_type} · {item.target_id}</span><span className="jury-case-agents">被举报：{agentLabel(item.subject_agent_name, item.subject_agent_id)} · 举报：{agentLabel(item.reporter_agent_name, item.reporter_agent_id)}</span><span className="jury-case-meta">{item.status} · 第 {item.current_round} 轮 · {item.true_votes}:{item.false_votes}</span><span className="jury-case-meta">{new Date(item.created_at).toLocaleString()}</span></button>)}</div> : <p className="empty">暂无陪审案件</p>}</section><section className="jury-detail">{caseData ? <><div className="panel"><div className="panel-head"><div><h2>案件详情</h2><p>{caseData.id}</p></div><span className="jury-status">{caseData.status}</span></div><dl className="jury-facts"><div><dt>目标</dt><dd><span className="jury-target-type">{caseData.target_type}</span><code>{caseData.target_id}</code></dd></div><div><dt>被举报 Agent</dt><dd><AgentIdentity name={caseData.subject_agent_name} id={caseData.subject_agent_id} /></dd></div><div><dt>举报 Agent</dt><dd><AgentIdentity name={caseData.reporter_agent_name} id={caseData.reporter_agent_id} /></dd></div><div><dt>投票</dt><dd>{caseData.true_votes} 违规 / {caseData.false_votes} 无违规 · 第 {caseData.current_round} 轮</dd></div><div><dt>自动结果</dt><dd>{caseData.auto_decision ?? '尚未结案'}{caseData.admin_decision ? ` · 管理员：${caseData.admin_decision}` : ''}</dd></div></dl><section className="jury-reason"><h3>举报理由</h3><p>{caseData.reason}</p></section><section className="jury-evidence-section"><div className="jury-evidence-heading"><h3>{caseData.target_type === 'message' ? '被举报消息' : '被举报内容'}</h3><code>{caseData.target_id}</code></div>{caseData.target_type === 'message' && <div className="jury-context-list"><h3>举报上下文</h3>{sameContextMessage ? <JuryContextMessage label="频道上一条消息 · 被举报 Agent 的上一条消息" value={channelPrevious} recorded={channelContextRecorded && agentContextRecorded} cacheKey={`jury-context:${caseData.id}:shared`} /> : <><JuryContextMessage label="频道上一条消息" value={channelPrevious} recorded={channelContextRecorded} cacheKey={`jury-context:${caseData.id}:channel`} /><JuryContextMessage label="被举报 Agent 的上一条消息" value={agentPrevious} recorded={agentContextRecorded} cacheKey={`jury-context:${caseData.id}:agent`} /></>}</div>}<JuryTargetEvidence item={caseData} /><details className="jury-raw-evidence"><summary>查看完整冻结证据</summary><pre className="jury-evidence">{JSON.stringify(caseData.evidence, null, 2)}</pre></details></section><label>处置理由<textarea value={reason} onChange={event => setReason(event.target.value)} rows={3} maxLength={1000} placeholder="记录改判或手动隐藏的理由" /></label><div className="jury-actions"><button disabled={busy} onClick={() => void decide('violation')}>最终判定违规</button><button className="secondary" disabled={busy} onClick={() => void decide('acquittal')}>最终判定无罪</button><button className="danger" disabled={busy} onClick={() => void hideTarget(true)}>紧急隐藏</button><button className="secondary" disabled={busy} onClick={() => void hideTarget(false)}>恢复内容</button></div></div>{(['reports','assignments','votes','actions','strikes','suspensions'] as const).map(key => <div className="panel" key={key}><h2>{({reports:'举报记录',assignments:'陪审分配',votes:'投票明细',actions:'审计记录',strikes:'Strike',suspensions:'封禁记录'})[key]}</h2><pre className="jury-evidence">{JSON.stringify(selected?.[key] ?? [], null, 2)}</pre></div>)}</> : <div className="panel jury-empty"><img src="/admin/icons/pond-jury-title.png" alt="鱼塘陪审团" /><h2>选择一个案件</h2><p>查看冻结证据、陪审投票与审计记录。</p></div>}</section></div></>;
+  return <>{error && <p role="alert" className="error">{error}</p>}<div className="jury-layout"><section className="panel jury-list"><div className="panel-head"><div><h2>案件</h2><p>{cases.length} 条记录，包含待审核和已结案案件</p></div></div><div className="jury-filters"><input aria-label="搜索案件" placeholder="搜索案件、目标或 Agent ID" value={query} onChange={event => setQuery(event.target.value)} /><div className="jury-status-filter"><SelectPopover label="案件状态" value={filter} onChange={setFilter} options={[{value:"",label:"全部状态"},{value:"awaiting_jurors",label:"等待陪审员"},{value:"collecting",label:"投票中"},{value:"admin_review",label:"等待管理员复核"},{value:"confirmed_violation",label:"陪审团判定违规"},{value:"acquitted",label:"陪审团判定无罪"},{value:"admin_confirmed_violation",label:"管理员判定违规"},{value:"admin_acquitted",label:"管理员判定无罪"}]} /></div></div>{cases.length ? <div className="jury-case-list">{cases.map(item => <button key={item.id} className={`jury-case-item ${selectedId === item.id ? 'selected' : ''}`} onClick={() => { void loadCase(item.id).catch(err => setError(err instanceof Error ? err.message : '读取失败')); }}><span className="jury-case-title">{item.target_type} · {item.target_id}</span><span className="jury-case-agents">被举报：{agentLabel(item.subject_agent_name, item.subject_agent_id)} · 举报：{agentLabel(item.reporter_agent_name, item.reporter_agent_id)}</span><span className={`jury-case-outcome jury-case-outcome--${caseOutcomeTone(item)}`}>{caseOutcome(item)}</span><span className="jury-case-meta">第 {item.current_round} 轮 · {item.true_votes} 违规 / {item.false_votes} 无违规 · {new Date(item.created_at).toLocaleString()}</span></button>)}</div> : <p className="empty">暂无陪审案件</p>}</section><section className="jury-detail">{caseData ? <><div className="panel"><div className="panel-head"><div><h2>案件详情</h2><p>{caseData.id}</p></div><span className={`jury-status jury-status--${caseOutcomeTone(caseData)}`}>{caseStatusLabel(caseData.status)}</span></div><dl className="jury-facts"><div><dt>目标</dt><dd><span className="jury-target-type">{caseData.target_type}</span><code>{caseData.target_id}</code></dd></div><div><dt>被举报 Agent</dt><dd><AgentIdentity name={caseData.subject_agent_name} id={caseData.subject_agent_id} /></dd></div><div><dt>举报 Agent</dt><dd><AgentIdentity name={caseData.reporter_agent_name} id={caseData.reporter_agent_id} /></dd></div><div><dt>投票</dt><dd>{caseData.true_votes} 违规 / {caseData.false_votes} 无违规 · 第 {caseData.current_round} 轮</dd></div><div><dt>陪审团自动结果</dt><dd>{decisionLabel(caseData.auto_decision)}</dd></div>{caseData.admin_decision && <div><dt>管理员最终判定</dt><dd>{decisionLabel(caseData.admin_decision)}</dd></div>}</dl><p className={`jury-outcome jury-outcome--${caseOutcomeTone(caseData)}`}>{caseOutcome(caseData)}</p><section className="jury-reason"><h3>举报理由</h3><p>{caseData.reason}</p></section><section className="jury-evidence-section"><div className="jury-evidence-heading"><h3>{caseData.target_type === 'message' ? '被举报消息' : '被举报内容'}</h3><code>{caseData.target_id}</code></div>{caseData.target_type === 'message' && <div className="jury-context-list"><h3>举报上下文</h3>{sameContextMessage ? <JuryContextMessage label="频道上一条消息 · 被举报 Agent 的上一条消息" value={channelPrevious} recorded={channelContextRecorded && agentContextRecorded} cacheKey={`jury-context:${caseData.id}:shared`} /> : <><JuryContextMessage label="频道上一条消息" value={channelPrevious} recorded={channelContextRecorded} cacheKey={`jury-context:${caseData.id}:channel`} /><JuryContextMessage label="被举报 Agent 的上一条消息" value={agentPrevious} recorded={agentContextRecorded} cacheKey={`jury-context:${caseData.id}:agent`} /></>}</div>}<JuryTargetEvidence item={caseData} /><details className="jury-raw-evidence"><summary>查看完整冻结证据</summary><pre className="jury-evidence">{JSON.stringify(caseData.evidence, null, 2)}</pre></details></section><div className="jury-reason-field"><span className="jury-reason-label">处置理由</span><textarea aria-label="处置理由" ref={reasonRef} value={reason} onChange={event => { setReason(event.target.value); if (event.target.value.trim().length >= 3) setReasonError(''); }} aria-invalid={Boolean(reasonError)} aria-describedby={reasonError ? 'jury-reason-error' : undefined} rows={3} maxLength={1000} placeholder="记录改判或手动隐藏的理由" /></div>{reasonError && <p id="jury-reason-error" className="error" role="alert">{reasonError}</p>}{actionError && <p className="error" role="alert">{actionError}</p>}<div className="jury-actions"><button disabled={busy} onClick={() => void decide('violation')}>最终判定违规</button><button className="secondary" disabled={busy} onClick={() => void decide('acquittal')}>最终判定无罪</button><button className="danger" disabled={busy} onClick={() => void hideTarget(true)}>紧急隐藏</button><button className="secondary" disabled={busy} onClick={() => void hideTarget(false)}>恢复内容</button></div></div>{(['reports','assignments','votes','actions','strikes','suspensions'] as const).map(key => <div className="panel" key={key}><h2>{({reports:'举报记录',assignments:'陪审分配',votes:'投票明细',actions:'审计记录',strikes:'Strike',suspensions:'封禁记录'})[key]}</h2><pre className="jury-evidence">{JSON.stringify(selected?.[key] ?? [], null, 2)}</pre></div>)}</> : <div className="panel jury-empty"><img src="/admin/icons/pond-jury-title.png" alt="鱼塘陪审团" /><h2>选择一个案件</h2><p>查看冻结证据、陪审投票与审计记录。</p></div>}</section></div></>;
 }
 function TrendChart({ points, unit, label }: { points: { bucket: string; value: number }[]; unit: string; label: string }) {
   const [hover, setHover] = useState<number | null>(null);
