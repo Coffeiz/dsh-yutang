@@ -25,21 +25,22 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--yt-
 
 /* Server rail */
 .server-rail { z-index: 2; display: flex; position: relative; flex-direction: column; align-items: center; gap: 9px; padding: 16px 0 14px; background: var(--yt-bg-rail); }
-.rail-button { position: relative; display: grid; place-items: center; width: 42px; height: 42px; border: 0; border-radius: 14px; color: #858a98; background: transparent; cursor: pointer; transition: all var(--yt-transition); }
+.rail-button { position: relative; display: grid; place-items: center; width: 42px; height: 42px; border: 0; border-radius: 14px; color: #858a98; background: transparent; cursor: pointer; transition: color var(--yt-transition), background var(--yt-transition); }
 .rail-button i { font-size: 21px; }
 .discovery-nav { width: 42px; height: 42px; flex: 0 0 auto; border: 1px solid var(--yt-border-subtle); border-radius: 15px; color: #d5ddf7; background: #252b3a; transform: translateY(-6px); }
 .rail-github { text-decoration: none; }
-.rail-button:hover { border-radius: 13px; color: #f4f5f8; background: #24262d; }
+.rail-button:hover { color: #f4f5f8; background: #24262d; }
 .rail-active { color: white; background: #252b3a; }
 .rail-active:hover { background: #2a3040; }
-.discovery-nav:hover, .discovery-nav.rail-active { border-radius: 12px; color: #fff; background: #35466f; }
+.discovery-nav:hover, .discovery-nav.rail-active { border-radius: 15px; color: #fff; background: #35466f; }
 .rail-indicator { position: absolute; top: 12px; left: -13px; width: 3px; height: 18px; border-radius: 0 4px 4px 0; background: var(--yt-accent-hover); }
 .rail-spacer { flex: 1; }
 .rail-divider { display: block; position: absolute; top: calc(var(--yt-header-height) - 1px); left: 50%; width: 28px; height: 1px; flex: 0 0 auto; margin: 0; background: var(--yt-border-strong); transform: translateX(-50%); }
 .topic-rail-list { display: flex; width: 100%; max-height: calc(100dvh - 220px); flex-direction: column; align-items: center; gap: 8px; margin-top: 14px; overflow-y: auto; scrollbar-width: none; }
 .topic-rail-list::-webkit-scrollbar { display: none; }
-.topic-rail-button { display: grid; position: relative; width: 42px; height: 42px; flex: 0 0 auto; place-items: center; padding: 0; border: 1px solid var(--yt-border-subtle); border-radius: 15px; color: #d5ddf7; background: #252b3a; font-size: 14px; font-weight: 700; cursor: pointer; transition: border-radius var(--yt-transition), background var(--yt-transition), color var(--yt-transition); }
-.topic-rail-button:hover, .topic-rail-active { border-radius: 12px; color: #fff; background: #35466f; }
+.topic-rail-button { display: grid; position: relative; width: 42px; height: 42px; flex: 0 0 auto; place-items: center; padding: 0; border: 1px solid var(--yt-border-subtle); border-radius: 15px; color: #d5ddf7; background: #252b3a; font-size: 14px; font-weight: 700; cursor: pointer; transition: background var(--yt-transition), color var(--yt-transition); }
+.topic-rail-button:not(.topic-rail-active):hover { color: #fff; background: #35466f; }
+.topic-rail-active { border-radius: 15px; color: #fff; background: #35466f; }
 .topic-rail-active::before { position: absolute; top: 11px; bottom: 11px; left: -12px; width: 3px; border-radius: 0 4px 4px 0; background: var(--yt-accent-hover); content: ''; }
 
 /* Channel sidebar */
