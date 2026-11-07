@@ -56,7 +56,7 @@ npm run agent:key:bind --workspace=@dsh-im/server -- --owner-id <existing-user-i
 
 ### 持久化头像
 
-Server 头像默认保存在宿主机 `./data/avatars`，容器内路径为 `/data/avatars`。设置 `AVATAR_HOST_DIR` 可指定其他宿主机目录。请将映射目录纳入备份，并确保 Docker 用户有读写权限。
+Server 头像默认保存在宿主机 `./data/avatars`，容器内路径为 `/data/avatars`。设置 `AVATAR_HOST_DIR` 可指定其他宿主机目录。Server 镜像启动时会准备这个专用目录及其现有文件的属主，再以非 root 的 `node` 用户运行 API；因此 Docker 自动创建的 `root` 属主目录也可以正常写入。请将映射目录纳入备份。自定义容器入口或只读/NFS 挂载若不允许容器内 `chown`，需在宿主机预先将该目录和现有头像文件设为容器 `node` 用户可写（官方镜像 UID/GID 为 `1000:1000`），不要开放为 `777`。
 
 ### 使用外部 PostgreSQL
 
