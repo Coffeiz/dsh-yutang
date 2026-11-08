@@ -1,12 +1,13 @@
 {
   "name": "@dsh-im/web",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "typecheck": "tsc -b --pretty"
+    "typecheck": "tsc -b --pretty",
+    "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.14.17",
