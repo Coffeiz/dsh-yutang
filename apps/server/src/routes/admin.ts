@@ -1,12 +1,15 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type pg from "pg";
 import { z } from "zod";
 import type { Config } from "../config.js";
+import { ApiError } from "../errors.js";
+import { listServerLogs } from "../log-buffer.js";
 import { realtimeEvent, type RealtimeHub } from "../realtime/hub.js";
 import { registerAdminPondJuryRoutes } from "./admin-pond-jury.js";
 
-type Entry = { time: string; request_id: string; level: "debug" | "warn" | "error"; method: string; route: string; status: number; duration_ms: number; error_type: string | null };
+type Entry = { source: "api"; time: string; request_id: string; level: "info" | "warn" | "error"; method: string; route: string; status: number; duration_ms: number; error_type: string | null; error_code: string | null; error_message: string | null; message: null };
+type RequestError = { type: string; code: string | null; message: string | null };
 const adminSessionCookie = "dsh_yutang_admin";
 const adminSessionMaxAge = 8 * 60 * 60;
 
@@ -17,6 +20,39 @@ function sessionCookie(token: string, secure: boolean, clear = false): string {
 function cookieSession(header: string | undefined): string {
   const value = header?.split(";").map(part => part.trim()).find(part => part.startsWith(`${adminSessionCookie}=`));
   return value?.slice(adminSessionCookie.length + 1) ?? "";
+}
+
+function adminSessionKey(config: Config): Buffer | null {
+  if (!config.ADMIN_USERNAME || !config.ADMIN_PASSWORD) return null;
+  return createHash("sha256")
+    .update("dsh-yutang-admin-session:v1\0")
+    .update(config.ADMIN_USERNAME)
+    .update("\0")
+    .update(config.ADMIN_PASSWORD)
+    .digest();
+}
+
+function createAdminSession(config: Config): string | null {
+  const key = adminSessionKey(config);
+  if (!key) return null;
+  const expiresAt = Math.floor(Date.now() / 1000) + adminSessionMaxAge;
+  const payload = `${expiresAt}.${randomBytes(24).toString("base64url")}`;
+  const signature = createHmac("sha256", key).update(payload).digest("base64url");
+  return `${payload}.${signature}`;
+}
+
+function validAdminSession(token: string, config: Config): boolean {
+  const [expiresAtText, nonce, signature, ...extra] = token.split(".");
+  const expiresAt = Number(expiresAtText);
+  if (extra.length || !Number.isSafeInteger(expiresAt) || expiresAt <= Math.floor(Date.now() / 1000)
+    || !nonce || !/^[A-Za-z0-9_-]{32}$/.test(nonce)
+    || !signature || !/^[A-Za-z0-9_-]{43}$/.test(signature)) return false;
+  const key = adminSessionKey(config);
+  if (!key) return false;
+  const payload = `${expiresAtText}.${nonce}`;
+  const expected = createHmac("sha256", key).update(payload).digest();
+  const actual = Buffer.from(signature, "base64url");
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
 type RuntimeSample = { time: number; duration_ms: number; status: number; route: string; error_type: string | null; active_at_start: number };
@@ -30,9 +66,8 @@ function percentile(values: number[], proportion: number): number | null {
 }
 
 export function registerAdminRoutes(app: FastifyInstance, pool: pg.Pool, config: Config, hub: RealtimeHub) {
-  const sessions = new Map<string, number>();
   const entries: Entry[] = [];
-  const requestErrors = new WeakMap<object, string>();
+  const requestErrors = new WeakMap<object, RequestError>();
   const requestConcurrency = new WeakMap<object, number>();
   const countedRequests = new WeakSet<object>();
   const runtimeSamples: RuntimeSample[] = [];
@@ -42,7 +77,15 @@ export function registerAdminRoutes(app: FastifyInstance, pool: pg.Pool, config:
     countedRequests.delete(request);
     activeRequests = Math.max(0, activeRequests - 1);
   };
-  app.addHook("onError", async (request, _reply, error) => { requestErrors.set(request, error.name); });
+  app.addHook("onError", async (request, _reply, error) => {
+    requestErrors.set(request, {
+      type: error.name,
+      code: error instanceof ApiError ? error.diagnosticCode ?? error.code : null,
+      // API errors have deliberately curated public messages. Never copy arbitrary
+      // exception text into the Admin log, where database/client internals may leak.
+      message: error instanceof ApiError ? error.message : null,
+    });
+  });
   const pending = new Map<string, { requests: number; bytesIn: number; bytesOut: number }>();
   let inFlight: Promise<void> | undefined;
   async function flush(): Promise<void> {
@@ -83,27 +126,24 @@ export function registerAdminRoutes(app: FastifyInstance, pool: pg.Pool, config:
     if (request.url.startsWith("/admin/") || request.url.startsWith("/health/")) return;
     const startedConcurrency = requestConcurrency.get(request) ?? 0;
     finishRequest(request);
-    const errorType = requestErrors.get(request) ?? null;
-    runtimeSamples.push({ time: Date.now(), duration_ms: Math.max(0, reply.elapsedTime), status: reply.statusCode, route: request.routeOptions.url ?? request.url.split("?")[0] ?? "unknown", error_type: errorType, active_at_start: startedConcurrency });
+    const requestError = requestErrors.get(request) ?? null;
+    runtimeSamples.push({ time: Date.now(), duration_ms: Math.max(0, reply.elapsedTime), status: reply.statusCode, route: request.routeOptions.url ?? request.url.split("?")[0] ?? "unknown", error_type: requestError?.type ?? null, active_at_start: startedConcurrency });
     const cutoff = Date.now() - runtimeWindowMs;
     while (runtimeSamples.length && (runtimeSamples.length > maxRuntimeSamples || runtimeSamples[0]!.time < cutoff)) runtimeSamples.shift();
-    entries.push({ time: new Date().toISOString(), request_id: request.id, level: reply.statusCode >= 500 ? "error" : reply.statusCode >= 400 ? "warn" : "debug", method: request.method, route: request.routeOptions.url ?? "unknown", status: reply.statusCode, duration_ms: Math.round(reply.elapsedTime), error_type: errorType });
+    entries.push({ source: "api", time: new Date().toISOString(), request_id: request.id, level: reply.statusCode >= 500 ? "error" : reply.statusCode >= 400 ? "warn" : "info", method: request.method, route: request.routeOptions.url ?? "unknown", status: reply.statusCode, duration_ms: Math.round(reply.elapsedTime), error_type: requestError?.type ?? null, error_code: requestError?.code ?? null, error_message: requestError?.message ?? null, message: null });
     if (entries.length > 500) entries.shift();
   });
   const equal = (a: string, b: string) => timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
   const authorized = (header: string | undefined, cookie: string | undefined) => {
     const token = cookieSession(cookie) || (header?.startsWith("Bearer ") ? header.slice(7) : "");
-    const expiry = sessions.get(token);
-    if (!expiry || expiry <= Date.now()) { sessions.delete(token); return false; }
-    return true;
+    return validAdminSession(token, config);
   };
   app.post("/admin/v1/login", { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } }, async (request, reply) => {
     reply.header("Cache-Control", "no-store");
     const data = z.object({ username: z.string().max(256), password: z.string().max(1024) }).safeParse(request.body);
     if (!config.ADMIN_USERNAME || !config.ADMIN_PASSWORD || !data.success || !equal(data.data.username, config.ADMIN_USERNAME) || !equal(data.data.password, config.ADMIN_PASSWORD)) return reply.code(401).send({ error: "Invalid credentials" });
-    for (const [token, expiry] of sessions) if (expiry <= Date.now()) sessions.delete(token);
-    const token = randomBytes(32).toString("base64url");
-    sessions.set(token, Date.now() + 8 * 60 * 60 * 1000);
+    const token = createAdminSession(config);
+    if (!token) return reply.code(401).send({ error: "Invalid credentials" });
     const secureCookie = config.ADMIN_COOKIE_SECURE || request.protocol === "https" || request.headers["x-forwarded-proto"] === "https";
     reply.header("Set-Cookie", sessionCookie(token, secureCookie));
     return { ok: true, expires_in: adminSessionMaxAge };
@@ -121,7 +161,6 @@ export function registerAdminRoutes(app: FastifyInstance, pool: pg.Pool, config:
     }
   });
   app.post("/admin/v1/logout", async (request, reply) => {
-    sessions.delete(cookieSession(request.headers.cookie) || request.headers.authorization?.slice(7) || "");
     const secureCookie = config.ADMIN_COOKIE_SECURE || request.protocol === "https" || request.headers["x-forwarded-proto"] === "https";
     reply.header("Set-Cookie", sessionCookie("", secureCookie, true));
     return { ok: true };
@@ -169,7 +208,7 @@ export function registerAdminRoutes(app: FastifyInstance, pool: pg.Pool, config:
       process: { uptime_seconds: Math.floor(process.uptime()), memory_rss_bytes: process.memoryUsage().rss, heap_used_bytes: process.memoryUsage().heapUsed },
     };
   });
-  app.get("/admin/v1/logs", async () => ({ entries: entries.slice().reverse() }));
+  app.get("/admin/v1/logs", async () => ({ entries: [...entries, ...listServerLogs()].sort((a, b) => b.time.localeCompare(a.time)).slice(0, 500) }));
   app.get("/admin/v1/accounts", async (request, reply) => {
     const query = z.object({ q: z.string().max(80).optional() }).safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: "Invalid query" });
