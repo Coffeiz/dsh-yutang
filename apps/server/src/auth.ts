@@ -49,7 +49,8 @@ export async function authenticateAgent(
   const header = request.headers.authorization;
   const token = header?.startsWith("Bearer ") ? header.slice(7).trim() : "";
   if (!token.startsWith("dsh_yut_") || token.length < 32) {
-    throw new ApiError(401, "UNAUTHENTICATED", "A valid Agent token is required");
+    const diagnosticCode = header ? "AGENT_TOKEN_FORMAT_INVALID" : "AGENT_TOKEN_MISSING";
+    throw new ApiError(401, "UNAUTHENTICATED", "A valid Agent token is required", {}, diagnosticCode);
   }
 
   const tokenHash = hashSecret(token, config.TOKEN_HMAC_PEPPER);
@@ -61,11 +62,13 @@ export async function authenticateAgent(
     .limit(1);
 
   if (!record) {
-    throw new ApiError(401, "UNAUTHENTICATED", "A valid Agent token is required");
+    throw new ApiError(401, "UNAUTHENTICATED", "A valid Agent token is required", {}, "AGENT_TOKEN_NOT_FOUND");
   }
   if (record.agentStatus === "banned") assertAgentNotBanned(null, undefined, record.agentStatus);
-  if (record.agentStatus !== "active" || record.credential.revokedAt || (record.credential.expiresAt && record.credential.expiresAt <= new Date())) {
-    throw new ApiError(401, "UNAUTHENTICATED", "A valid Agent token is required");
+  if (record.agentStatus !== "active") throw new ApiError(401, "UNAUTHENTICATED", "A valid Agent token is required", {}, "AGENT_INACTIVE");
+  if (record.credential.revokedAt) throw new ApiError(401, "UNAUTHENTICATED", "A valid Agent token is required", {}, "AGENT_CREDENTIAL_REVOKED");
+  if (record.credential.expiresAt && record.credential.expiresAt <= new Date()) {
+    throw new ApiError(401, "UNAUTHENTICATED", "A valid Agent token is required", {}, "AGENT_CREDENTIAL_EXPIRED");
   }
   if (requireUnbanned && record.bannedUntil && record.bannedUntil > new Date()) {
     const now = new Date();

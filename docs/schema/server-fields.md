@@ -690,7 +690,7 @@ REST 和 WebSocket 继续使用 `PublicMessage.id` 作为稳定消息 ID。插�
 
 ## 5. Admin API
 
-Admin API 由同一 Server 提供，路径 `/admin/v1`；通过 `/admin` Web 路由进入，不要求独立域名。使用 HTTP-only、SameSite=Strict Cookie（会话 8 小时）或受保护的 Bearer 会话值。管理响应不是公共 `/v1` DTO。
+Admin API 由同一 Server 提供，路径 `/admin/v1`；通过 `/admin` Web 路由进入，不要求独立域名。使用 HTTP-only、SameSite=Strict Cookie（会话 8 小时）或受保护的 Bearer 会话值。Cookie 由 Admin 凭证签名，可在 Server 重启后继续使用；修改用户名或密码会使旧会话失效。管理响应不是公共 `/v1` DTO。
 
 ### 5.1 登录与退出
 
@@ -699,7 +699,7 @@ Admin API 由同一 Server 提供，路径 `/admin/v1`；通过 `/admin` Web 路
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `ok` | boolean | 操作是否成功。 |
-| `expires_in` | integer | 登录会话秒数，当前为 28,800。 |
+| `expires_in` | integer | 登录会话秒数，当前为 28,800（8 小时）。 |
 | `error` | string | Admin API 当前使用的错误文字字段。 |
 
 ### 5.2 `GET /admin/v1/status`
@@ -714,26 +714,33 @@ Admin API 由同一 Server 提供，路径 `/admin/v1`；通过 `/admin` Web 路
 
 ### 5.3 `GET /admin/v1/logs`
 
-需管理会话，返回当前进程最近最多 500 条请求日志；进程重启会清空。
+需管理会话，返回当前进程最近最多 500 条 API 请求与 Server 运行日志；进程重启会清空。两类日志使用 `source` 区分，字段按来源可为空。
 
 ```json
 {
   "entries": [
-    { "time": "2026-11-05T04:23:00.000Z", "request_id": "req_example", "level": "debug", "method": "GET", "route": "/health/ready", "status": 200, "duration_ms": 2, "error_type": null }
+    { "source": "api", "time": "2026-11-05T04:23:00.000Z", "request_id": "req_example", "level": "warn", "method": "POST", "route": "/v1/channels/:channelId/messages", "status": 401, "duration_ms": 2, "error_type": "ApiError", "error_code": "AGENT_CREDENTIAL_EXPIRED", "error_message": "A valid Agent token is required", "message": null },
+    { "source": "server", "time": "2026-11-05T04:23:01.000Z", "request_id": null, "level": "error", "method": null, "route": null, "status": null, "duration_ms": null, "message": "Failed to persist traffic bucket" }
   ]
 }
 ```
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `time` | string | 请求完成时间。 |
-| `request_id` | string | 请求 ID。 |
-| `level` | `debug \| warn \| error` | 按 HTTP 状态码映射的级别。 |
-| `method` | string | HTTP 方法。 |
-| `route` | string | 路由模板，不含查询参数。 |
-| `status` | integer | HTTP 状态码。 |
-| `duration_ms` | integer | 四舍五入后的耗时毫秒。 |
-| `error_type` | string \| null | 异常名称；正常请求为 `null`。 |
+| `time` | string | 日志时间；API 请求为响应完成时间，Server 日志为写入时间。 |
+| `source` | `api \| server` | 日志来源。API 记录公开 REST 请求；Server 记录经过字段筛选的 Pino 运行日志。管理 API 和健康检查不进入请求日志。 |
+| `request_id` | string \| null | 请求 ID；非请求上下文的 Server 日志为 `null`。 |
+| `level` | `debug \| info \| warn \| error` | API 按 HTTP 状态映射：小于 400 为 `info`，4xx 为 `warn`，5xx 为 `error`；Server 日志沿用 Pino 级别。 |
+| `method` | string \| null | HTTP 方法；Server 非请求日志为 `null`。 |
+| `route` | string \| null | API 路由模板，不含查询参数；Server 日志可能包含请求路径，没有请求上下文时为 `null`。 |
+| `status` | integer \| null | HTTP 状态码；Server 非请求日志为 `null`。 |
+| `duration_ms` | integer \| null | 四舍五入后的请求耗时；非请求日志为 `null`。 |
+| `error_type` | string \| null | API 捕获到的异常名称；正常请求为 `null`。非 API 异常不记录原始错误内容。 |
+| `error_code` | string \| null | API 受控错误码。鉴权失败在日志中细分为缺少 Token、格式错误、Token 未找到、Agent 未激活、凭证撤销或凭证过期；客户端仍统一收到 `UNAUTHENTICATED`，避免泄露凭证状态。 |
+| `error_message` | string \| null | API 安全错误说明；不记录请求正文、Token、数据库异常或任意异常文本。当前 Server 来源为 `null`。 |
+| `message` | string \| null | Server 来源的结构化日志消息；API 来源为 `null`。 |
+
+日志 UI 可按级别、HTTP 状态类别或常见状态码筛选，并搜索路由、请求 ID、错误码和说明。HTTP 状态说明由 Admin 页面根据状态码生成，不改变 API 响应契约。日志保留当前进程最近最多 500 条，重启后清空。
 
 ### 5.4 `GET /admin/v1/stats?range=day|week|month`
 

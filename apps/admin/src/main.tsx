@@ -8,7 +8,7 @@ const MessageMarkdown = lazy(() => import('../../web/src/components/MessageMarkd
 
 type Range = 'day' | 'week' | 'month';
 type Stats = { traffic_pending: boolean; totals: { topics: number; channels: number; messages: number; agents: number }; series: { bucket: string; messages: number; topics: number; channels: number }[]; traffic: { bucket: string; requests: string; bytes_in: string; bytes_out: string }[] };
-type Log = { time: string; request_id: string; level: string; method: string; route: string; status: number; duration_ms: number; error_type: string | null };
+type Log = { source: 'api' | 'server' | string; time: string; request_id: string | null; level: string; method: string | null; route: string | null; status: number | null; duration_ms: number | null; error_type?: string | null; error_code?: string | null; error_message?: string | null; message?: string | null };
 type Health = {
   sampled_at: string; window_seconds: number; scope: string;
   api: { sampled_requests: number; requests_per_minute: number; p50_ms: number | null; p95_ms: number | null; p99_ms: number | null; active_requests: number; peak_concurrency: number; success_responses: number; client_error_responses: number; server_error_responses: number; timeouts: number };
@@ -218,16 +218,56 @@ function HealthPage({ onLogout }: { onLogout: () => void }) {
     <section className="panel"><div className="panel-head"><div><h2>响应结果与资源</h2><p>进程指标即时采样；数据库连接池来自当前 Server 的 PostgreSQL Pool。</p></div></div><div className="health-detail-grid"><div><span>2xx / 3xx</span><strong>{health?.api.success_responses ?? '—'}</strong></div><div><span>4xx</span><strong>{health?.api.client_error_responses ?? '—'}</strong></div><div><span>5xx</span><strong>{health?.api.server_error_responses ?? '—'}</strong></div><div><span>运行时间</span><strong>{health ? `${Math.floor(health.process.uptime_seconds / 3600)}h ${Math.floor(health.process.uptime_seconds % 3600 / 60)}m` : '—'}</strong></div><div><span>RSS 内存</span><strong>{health ? mib(health.process.memory_rss_bytes) : '—'}</strong></div><div><span>Heap 使用</span><strong>{health ? mib(health.process.heap_used_bytes) : '—'}</strong></div><div><span>DB 连接池</span><strong>{health ? `${health.database.pool_idle}/${health.database.pool_total} 空闲` : '—'}</strong></div><div><span>DB 等待连接</span><strong>{health?.database.pool_waiting ?? '—'}</strong></div><div><span>数据库</span><strong>{health?.database.status === 'online' ? '在线' : health?.database.status ?? '—'}</strong></div><div><span>实时连接</span><strong>{health?.realtime.connections ?? '—'}</strong></div><div><span>频道订阅</span><strong>{health?.realtime.channel_subscriptions ?? '—'}</strong></div><div><span>话题订阅</span><strong>{health?.realtime.topic_subscriptions ?? '—'}</strong></div><div><span>收件箱连接</span><strong>{health?.realtime.inbox_connections ?? '—'}</strong></div></div></section>
   </div>;
 }
+function LogsPanel({ logs }: { logs: Log[] | null }) {
+  const [level, setLevel] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [search, setSearch] = useState('');
+  const statusLabel = (status: number | null) => {
+    if (status == null) return '';
+    if (status === 401) return '未认证';
+    if (status === 403) return '无权限';
+    if (status === 404) return '未找到';
+    if (status === 409) return '资源冲突';
+    if (status === 429) return '请求过多';
+    if (status >= 500) return '服务端错误';
+    if (status >= 400) return '请求错误';
+    if (status >= 300) return '重定向';
+    return '成功';
+  };
+  const visible = (logs ?? []).filter(log => (level === 'all' || log.level === level)
+    && (statusFilter === 'all' || (statusFilter === '4xx' && log.status != null && log.status >= 400 && log.status < 500) || (statusFilter === '5xx' && log.status != null && log.status >= 500) || (statusFilter === 'errors' && log.status != null && log.status >= 400) || statusFilter === String(log.status))
+    && (!search.trim() || JSON.stringify(log).toLowerCase().includes(search.trim().toLowerCase())));
+  return <section className="panel log-panel">
+    <div className="panel-head"><div><h2>排障日志</h2><p>最近 500 条 Server 运行日志和 API 请求摘要；不记录请求正文或异常堆栈。</p></div>
+      <div className="log-toolbar">
+        <input className="search-input log-search" aria-label="搜索日志" placeholder="搜索路由、请求 ID 或错误码" value={search} onChange={event => setSearch(event.target.value)} />
+        <SelectPopover label="级别" value={level} onChange={setLevel} options={[{value:'all',label:'全部'},{value:'debug',label:'Debug'},{value:'info',label:'Info'},{value:'warn',label:'Warning'},{value:'error',label:'Error'}]} />
+        <SelectPopover label="HTTP 状态" value={statusFilter} onChange={setStatusFilter} options={[{value:'all',label:'全部'},{value:'errors',label:'错误'},{value:'4xx',label:'4xx 客户端'},{value:'5xx',label:'5xx 服务端'},{value:'401',label:'401 未认证'},{value:'403',label:'403 无权限'},{value:'404',label:'404 未找到'},{value:'409',label:'409 冲突'},{value:'429',label:'429 限流'}]} />
+      </div>
+    </div>
+    <p className="log-count">显示 {visible.length} 条</p>
+    <div className="table-wrap log-table-wrap"><table className="diagnostic-log-table"><thead><tr><th>来源</th><th>时间</th><th>日志详情</th></tr></thead>
+      <tbody>{visible.map((log, index) => <tr key={`${log.time}-${index}`} className={`log-row log-${log.level}`}>
+        <td><span className="log-source">{log.source === 'api' ? 'API' : 'Server'}</span></td>
+        <td className="log-time">{new Date(log.time).toLocaleString()}</td>
+        <td><div className="log-main">{log.message ?? `${log.method && log.route ? `${log.method} ${log.route}` : 'API 请求'}${log.status != null ? ` → ${log.status} · ${statusLabel(log.status)}` : ''}${log.duration_ms != null ? ` · ${log.duration_ms} ms` : ''} · ${log.level.toUpperCase()}`}</div>
+          <div className="log-meta">{log.method && log.route && <span>{log.method} <code>{log.route}</code></span>}{log.status != null && <span>HTTP {log.status} · {statusLabel(log.status)}</span>}{log.duration_ms != null && <span>耗时 {log.duration_ms} ms</span>}{log.request_id && <span>请求 ID <code>{log.request_id}</code></span>}{log.error_code && <span>错误码 <code>{log.error_code}</code></span>}{log.error_message && <span>{log.error_message}</span>}{!log.error_code && log.error_type && <span>异常类型 <code>{log.error_type}</code></span>}</div>
+        </td>
+      </tr>)}</tbody>
+    </table>{visible.length === 0 && <p className="empty">没有匹配的日志</p>}</div>
+  </section>;
+}
+
 function App() {
   type Page = 'health' | 'data' | 'logs' | 'accounts' | 'topics' | 'moderation';
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
+  const [authCheckFailed, setAuthCheckFailed] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [range, setRange] = useState<Range>('day');
   const [metric, setMetric] = useState<'messages' | 'topics' | 'channels'>('messages');
   const [stats, setStats] = useState<Stats | null>(null);
   const [logs, setLogs] = useState<Log[] | null>(null);
-  const [logLevel, setLogLevel] = useState('all');
   const [error, setError] = useState('');
   const [page, setPage] = useState<Page>('data');
   const [query, setQuery] = useState('');
@@ -236,18 +276,27 @@ function App() {
   const [showNav, setShowNav] = useState(false);
   useEffect(() => {
     let active = true;
-    fetch('/admin/v1/status', { cache: 'no-store', credentials: 'same-origin' })
-      .then(async response => {
+    let retryTimer: number | undefined;
+    async function checkSession() {
+      try {
+        const response = await fetch('/admin/v1/status', { cache: 'no-store', credentials: 'same-origin' });
         if (!active) return;
-        if (response.status === 401) { setAuthenticated(false); return; }
+        if (response.status === 401) { setAuthCheckFailed(false); setAuthenticated(false); return; }
         if (response.status === 200 || response.status === 503) {
+          setAuthCheckFailed(false);
           setAuthenticated(true);
           return;
         }
         throw new Error('无法检查管理会话');
-      })
-      .catch(() => { if (active) { setError('无法连接管理服务'); setAuthenticated(false); } });
-    return () => { active = false; };
+      } catch {
+        if (!active) return;
+        // A short API/proxy restart must not be mistaken for an expired login.
+        setAuthCheckFailed(true);
+        retryTimer = window.setTimeout(() => { void checkSession(); }, 1500);
+      }
+    }
+    void checkSession();
+    return () => { active = false; if (retryTimer !== undefined) window.clearTimeout(retryTimer); };
   }, []);
   async function login(event: FormEvent) {
     event.preventDefault(); setError('');
@@ -306,11 +355,11 @@ function App() {
       .finally(() => { if (!controller.signal.aborted) setListLoading(false); });
     return () => controller.abort();
   }, [authenticated, page, query]);
-  if (authenticated === null) return <main className="login"><p>正在检查管理会话…</p></main>;
+  if (authenticated === null) return <main className="login"><p>{authCheckFailed ? '管理服务暂时无法连接，正在重试…' : '正在检查管理会话…'}</p></main>;
   if (!authenticated) return <main className="login"><form onSubmit={login}><p className="eyebrow">DSH · YUTANG</p><h1>管理入口</h1><p>登录查看鱼塘运行状态。</p><label>账号<input value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" required /></label><label>密码<input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" required /></label>{error && <p role="alert" className="error">{error}</p>}<button>登录</button></form></main>;
-  const nav = <><aside className={`admin-sidebar ${showNav ? 'admin-sidebar-open' : ''}`}><div className="admin-brand"><img className="admin-brand-logo" src="/admin/favicon.png" alt="" /><div><strong>鱼塘管理</strong><small>DSH · YUTANG</small></div></div><nav aria-label="管理页面">{([['health','运行状况','ri-pulse-line'],['data','数据','ri-bar-chart-box-line'],['logs','日志','ri-file-list-3-line'],['accounts','账号管理','ri-user-settings-line'],['topics','话题管理','ri-hashtag'],['moderation','鱼塘陪审团','ri-scales-3-line']] as [Page,string,string][]).map(([key,label,icon]) => <button key={key} className={page===key?'selected':'secondary'} aria-current={page===key?'page':undefined} onClick={() => { setPage(key); setError(''); setShowNav(false); }}><i className={icon} aria-hidden="true" />{label}</button>)}</nav><div className="admin-sidebar-footer">管理控制台</div></aside>{showNav && <button className="admin-nav-backdrop" aria-label="关闭导航" onClick={() => setShowNav(false)} />}</>;
+  const nav = <><aside className={`admin-sidebar ${showNav ? 'admin-sidebar-open' : ''}`}><div className="admin-brand"><img className="admin-brand-logo" src={new URL('favicon.png', window.location.href).toString()} alt="" /><div><strong>鱼塘管理</strong><small>DSH · YUTANG</small></div></div><nav aria-label="管理页面">{([['health','运行状况','ri-pulse-line'],['data','数据','ri-bar-chart-box-line'],['logs','日志','ri-file-list-3-line'],['accounts','账号管理','ri-user-settings-line'],['topics','话题管理','ri-hashtag'],['moderation','鱼塘陪审团','ri-scales-3-line']] as [Page,string,string][]).map(([key,label,icon]) => <button key={key} className={page===key?'selected':'secondary'} aria-current={page===key?'page':undefined} onClick={() => { setPage(key); setError(''); setShowNav(false); }}><i className={icon} aria-hidden="true" />{label}</button>)}</nav><div className="admin-sidebar-footer">管理控制台</div></aside>{showNav && <button className="admin-nav-backdrop" aria-label="关闭导航" onClick={() => setShowNav(false)} />}</>;
   const mobileNavButton = <button className="admin-mobile-nav-button icon-button" aria-label="打开导航" onClick={() => setShowNav(true)}><i className="ri-menu-2-line" aria-hidden="true" /></button>;
-  if (page !== 'data') return <div className="admin-shell">{nav}<main className="dashboard"><header className="admin-topbar"><div className="admin-page-heading">{mobileNavButton}<div><p className="eyebrow">DSH · YUTANG</p><h1>{page === 'health' ? '运行状况' : page === 'logs' ? '运行日志' : page === 'accounts' ? '账号管理' : page === 'topics' ? '话题管理' : '鱼塘陪审团'}</h1><p>{page === 'moderation' ? '查看陪审投票，并对自动结果作最终判定。' : page === 'health' ? '查看 API 响应、消息接口、并发、超时和进程资源。' : '鱼塘管理控制台'}</p></div></div><button className="secondary" onClick={() => { void fetch('/admin/v1/logout', { method: 'POST', credentials: 'same-origin' }); setAuthenticated(false); }}><i className="ri-logout-box-r-line" aria-hidden="true" /><span>退出</span></button></header>{error && <p role="alert" className="error">{error}</p>}{page === 'health' ? <HealthPage onLogout={() => { void fetch('/admin/v1/logout', { method: 'POST', credentials: 'same-origin' }); setAuthenticated(false); }} /> : page === 'moderation' ? <ModerationPage onLogout={() => { void fetch('/admin/v1/logout', { method: 'POST', credentials: 'same-origin' }); setAuthenticated(false); }} /> : page === 'logs' ? <section className="panel"><div className="panel-head"><div><h2>排障日志</h2><p>最近 500 条请求，不包含请求内容。</p></div><SelectPopover label="级别" value={logLevel} onChange={setLogLevel} options={[{value:'all',label:'全部'},{value:'debug',label:'Debug'},{value:'warn',label:'Warn'},{value:'error',label:'Error'}]} /></div><div className="table-wrap"><table><thead><tr><th>时间</th><th>级别</th><th>请求 ID</th><th>方法</th><th>路由</th><th>状态</th><th>耗时</th><th>错误</th></tr></thead><tbody>{(logs ?? []).filter(log => logLevel==='all'||log.level===logLevel).map((log,i)=><tr key={`${log.time}-${i}`}><td>{new Date(log.time).toLocaleString()}</td><td>{log.level}</td><td>{log.request_id}</td><td>{log.method}</td><td>{log.route}</td><td>{log.status}</td><td>{log.duration_ms} ms</td><td>{log.error_type ?? '—'}</td></tr>)}</tbody></table></div></section> : <section className="panel"><div className="panel-head"><div><h2>{page==='accounts'?'账号':'话题'}列表</h2><p>最多显示最近 200 条记录</p></div><input className="search-input" aria-label={`搜索${page==='accounts'?'账号':'话题'}`} placeholder={`搜索${page==='accounts'?'名称或 ID':'名称或 ID'}`} value={query} onChange={e=>setQuery(e.target.value)} /></div>{listLoading?<p className="empty">正在加载…</p>:<div className="table-wrap"><table><thead><tr>{(page==='accounts'?['显示名','账号 ID','状态','创建时间','操作']:['话题','话题 ID','可见性','状态','频道数','操作']).map(x=><th key={x}>{x}</th>)}</tr></thead><tbody>{items.map(item=><tr key={String(item.id)}>{page==='accounts'?<><td>{String(item.display_name)}</td><td>{String(item.id)}</td><td>{String(item.status)}</td><td>{new Date(String(item.created_at)).toLocaleString()}</td></>:<><td>{String(item.name)}</td><td>{String(item.id)}</td><td>{String(item.visibility)}</td><td>{String(item.status)}</td><td>{String(item.channel_count)}</td></>}<td className="actions"><button className="secondary" onClick={async()=>{const kind=page==='accounts'?'accounts':'topics';const action=page==='accounts'?(item.status==='banned'?'active':'banned'):(item.status==='disabled'?'active':'disabled');const r=await fetch(`/admin/v1/${kind}/${encodeURIComponent(String(item.id))}`,{method:'PATCH',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:action})});if(r.ok)setItems(rows=>rows.map(row=>row.id===item.id?{...row,status:action}:row));else setError('操作失败');}}>{page==='accounts'?(item.status==='banned'?'解除封禁':'封禁'):(item.status==='disabled'?'启用':'禁用')}</button><button className="danger" onClick={async()=>{if(!window.confirm(`确认删除${page==='accounts'?'账号':'话题'}？`))return;const r=await fetch(`/admin/v1/${page}/${encodeURIComponent(String(item.id))}`,{method:'DELETE',credentials:'same-origin'});if(r.ok)setItems(rows=>rows.filter(row=>row.id!==item.id));else setError('删除失败');}}>删除</button></td></tr>)}</tbody></table>{items.length===0&&<p className="empty">暂无匹配记录</p>}</div>}</section>}</main></div>;
+  if (page !== 'data') return <div className="admin-shell">{nav}<main className="dashboard"><header className="admin-topbar"><div className="admin-page-heading">{mobileNavButton}<div><p className="eyebrow">DSH · YUTANG</p><h1>{page === 'health' ? '运行状况' : page === 'logs' ? '运行日志' : page === 'accounts' ? '账号管理' : page === 'topics' ? '话题管理' : '鱼塘陪审团'}</h1><p>{page === 'moderation' ? '查看陪审投票，并对自动结果作最终判定。' : page === 'health' ? '查看 API 响应、消息接口、并发、超时和进程资源。' : '鱼塘管理控制台'}</p></div></div><button className="secondary" onClick={() => { void fetch('/admin/v1/logout', { method: 'POST', credentials: 'same-origin' }); setAuthenticated(false); }}><i className="ri-logout-box-r-line" aria-hidden="true" /><span>退出</span></button></header>{error && <p role="alert" className="error">{error}</p>}{page === 'health' ? <HealthPage onLogout={() => { void fetch('/admin/v1/logout', { method: 'POST', credentials: 'same-origin' }); setAuthenticated(false); }} /> : page === 'moderation' ? <ModerationPage onLogout={() => { void fetch('/admin/v1/logout', { method: 'POST', credentials: 'same-origin' }); setAuthenticated(false); }} /> : page === 'logs' ? <LogsPanel logs={logs} />: <section className="panel"><div className="panel-head"><div><h2>{page==='accounts'?'账号':'话题'}列表</h2><p>最多显示最近 200 条记录</p></div><input className="search-input" aria-label={`搜索${page==='accounts'?'账号':'话题'}`} placeholder={`搜索${page==='accounts'?'名称或 ID':'名称或 ID'}`} value={query} onChange={e=>setQuery(e.target.value)} /></div>{listLoading?<p className="empty">正在加载…</p>:<div className="table-wrap"><table><thead><tr>{(page==='accounts'?['显示名','账号 ID','状态','创建时间','操作']:['话题','话题 ID','可见性','状态','频道数','操作']).map(x=><th key={x}>{x}</th>)}</tr></thead><tbody>{items.map(item=><tr key={String(item.id)}>{page==='accounts'?<><td>{String(item.display_name)}</td><td>{String(item.id)}</td><td>{String(item.status)}</td><td>{new Date(String(item.created_at)).toLocaleString()}</td></>:<><td>{String(item.name)}</td><td>{String(item.id)}</td><td>{String(item.visibility)}</td><td>{String(item.status)}</td><td>{String(item.channel_count)}</td></>}<td className="actions"><button className="secondary" onClick={async()=>{const kind=page==='accounts'?'accounts':'topics';const action=page==='accounts'?(item.status==='banned'?'active':'banned'):(item.status==='disabled'?'active':'disabled');const r=await fetch(`/admin/v1/${kind}/${encodeURIComponent(String(item.id))}`,{method:'PATCH',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:action})});if(r.ok)setItems(rows=>rows.map(row=>row.id===item.id?{...row,status:action}:row));else setError('操作失败');}}>{page==='accounts'?(item.status==='banned'?'解除封禁':'封禁'):(item.status==='disabled'?'启用':'禁用')}</button><button className="danger" onClick={async()=>{if(!window.confirm(`确认删除${page==='accounts'?'账号':'话题'}？`))return;const r=await fetch(`/admin/v1/${page}/${encodeURIComponent(String(item.id))}`,{method:'DELETE',credentials:'same-origin'});if(r.ok)setItems(rows=>rows.filter(row=>row.id!==item.id));else setError('删除失败');}}>删除</button></td></tr>)}</tbody></table>{items.length===0&&<p className="empty">暂无匹配记录</p>}</div>}</section>}</main></div>;
   const traffic = stats?.traffic ?? [];
   const trafficValues = traffic.map(point => Number(point.bytes_in) + Number(point.bytes_out));
   return <div className="admin-shell">{nav}<main className="dashboard"><header className="admin-topbar"><div className="admin-page-heading">{mobileNavButton}<div><p className="eyebrow">DSH · YUTANG</p><h1>数据概览</h1><p>鱼塘内容规模与历史活动趋势。</p></div></div><button className="secondary" onClick={() => { void fetch('/admin/v1/logout', { method: 'POST', credentials: 'same-origin' }); setAuthenticated(false); setStats(null); setLogs(null); }}><i className="ri-logout-box-r-line" aria-hidden="true" /><span>退出</span></button></header>{error && <p role="alert" className="error">{error}</p>}<div className="cards">{([['主题', stats?.totals.topics], ['频道', stats?.totals.channels], ['消息', stats?.totals.messages], ['Agent', stats?.totals.agents]] as const).map(([label, value]) => <section className="card" key={label}><span>{label}</span><strong>{value ?? '—'}</strong></section>)}</div><section className="panel"><div className="panel-head"><div><h2>活动趋势</h2><p>按创建时间统计新增消息、主题或频道</p></div><div className="ranges">{([['day','日'],['week','周'],['month','月']] as const).map(([key,label]) => <button className={range === key ? 'selected' : 'secondary'} aria-pressed={range === key} key={key} onClick={() => setRange(key)}>{label}</button>)}</div></div><div className="ranges metric-select">{([['messages','消息'],['topics','主题'],['channels','频道']] as const).map(([key,label]) => <button key={key} aria-pressed={metric === key} className={metric === key ? 'selected' : 'secondary'} onClick={() => setMetric(key)}>{label}</button>)}</div>{stats ? <TrendChart label="活动趋势" unit={metric === 'messages' ? '条' : '个'} points={stats.series.map(point => ({ bucket: point.bucket, value: point[metric] }))} /> : <p className="empty">{error ? '数据暂不可用' : '正在加载数据…'}</p>}</section><section className="panel"><div className="panel-head"><div><h2>HTTP 流量</h2><p>{stats ? `当前时段请求 ${traffic.reduce((sum, point) => sum + Number(point.requests), 0)} 次 · 请求和响应体约 ${(trafficValues.reduce((a, b) => a + b, 0) / 1024).toFixed(1)} KiB` : error ? '流量数据暂不可用' : '正在加载流量数据…'}</p><p>按 Content-Length 和可计量响应体估算，不包含 WebSocket 和协议开销。</p>{stats?.traffic_pending && <p role="alert" className="error">部分流量数据尚未写入数据库，显示结果可能不完整。</p>}</div></div>{stats && <TrendChart label="HTTP 流量趋势" unit="字节" points={traffic.map(point => ({ bucket: point.bucket, value: Number(point.bytes_in) + Number(point.bytes_out) }))} />}</section></main></div>;
