@@ -26,6 +26,7 @@ export class YutangRuntime {
   private turnLockAllowedTools: string[] = [];
   private serverSwitchQueue: Promise<void> = Promise.resolve();
   private accessToken: { serverId: string; agentId: string; value: string; expiresAt: number } | undefined;
+  private readonly accessTokenRefreshes = new Map<string, Promise<string>>();
   private readonly credentialProfileId: string;
   constructor(readonly store: StateStore, readonly defaultServerUrl: string, private readonly credentials: CredentialProvider, private readonly logger: LoggerLike = console, dataDir = 'default') {
     this.credentialProfileId = createHash('sha256').update(resolve(dataDir)).digest('hex').slice(0, 24);
@@ -157,6 +158,37 @@ export class YutangRuntime {
     return new YutangApi(server.server_url, accessToken ?? undefined);
   }
 
+  private async recoverUnauthorizedToken(serverId: string, agentId: string, rejectedToken: string, signal?: AbortSignal) {
+    const isFreshReplacement = (token: typeof this.accessToken) => token?.serverId === serverId
+      && token.agentId === agentId
+      && token.value !== rejectedToken
+      && token.expiresAt > Date.now() + 30_000;
+    if (isFreshReplacement(this.accessToken)) return this.accessToken!.value;
+
+    const refreshKey = `${serverId}:${agentId}`;
+    const pending = this.accessTokenRefreshes.get(refreshKey);
+    if (pending) return pending;
+
+    const refresh = (async () => {
+      const state = await this.store.load();
+      if (state.settings.social_mode === 'off') throw new ApiError('SOCIAL_MODE_BLOCKED: off 模式已暂停鱼塘 Server 网络访问。');
+      const server = activeConnection(state);
+      if (server.id !== serverId || server.identity?.agent_id !== agentId) throw new ApiError('Server 连接或 Agent 身份已变化，请重试当前操作。');
+
+      if (isFreshReplacement(this.accessToken)) return this.accessToken!.value;
+      if (this.accessToken?.serverId === serverId && this.accessToken.agentId === agentId && this.accessToken.value === rejectedToken) {
+        this.accessToken = undefined;
+      }
+      return this.authenticate(server.identity, server.id, signal);
+    })();
+    this.accessTokenRefreshes.set(refreshKey, refresh);
+    try {
+      return await refresh;
+    } finally {
+      if (this.accessTokenRefreshes.get(refreshKey) === refresh) this.accessTokenRefreshes.delete(refreshKey);
+    }
+  }
+
   private identityCredential(serverId: string): CredentialKey {
     const suffix = createHash('sha256').update(serverId).digest('hex').slice(0, 20);
     return credentialKey('dsh-yutang', `profile-${this.credentialProfileId}-connection-${suffix}`);
@@ -216,6 +248,7 @@ export class YutangRuntime {
     const latestServer = activeConnection(latest);
     if (latestServer.id !== server.id) throw new ApiError('Server 连接已切换，请重试当前操作。');
     const api = this.api(latestServer, accessToken);
+    api.setUnauthorizedRecovery((rejectedToken, requestSignal) => this.recoverUnauthorizedToken(latestServer.id, latestServer.identity!.agent_id, rejectedToken, requestSignal));
     // Revalidate on every tool operation so cached Bearer Sessions cannot
     // bypass a ban and public read endpoints still return the unified ban result.
     await api.getMe({ signal });
