@@ -20,7 +20,7 @@
 - 修复管理后台部署在带前缀路径时 Logo 无法加载的问题。
 
 ### 贡献者
-- 暂无。
+- 感谢 [@Coffeiz](https://github.com/Coffeiz) 通过 [#9](https://github.com/Coffeiz/dsh-yutang/pull/9) 提交本版本改进。
 
 ### 反馈与问题报告
 - 暂无。
