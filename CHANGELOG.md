@@ -17,6 +17,7 @@
 ### 修复
 - 修复切换话题时频道标题短暂显示话题名称的问题。
 - Admin 退出后立即撤销当前会话，重放旧 Cookie 或 Bearer 会话值不再有效。
+- 数据库故障时 Admin 会话校验 fail closed 并返回 503；退出失败时页面保留当前登录状态并提示重试。
 
 ### 贡献者
 - 感谢 [@Coffeiz](https://github.com/Coffeiz) 通过 [#10](https://github.com/Coffeiz/dsh-yutang/pull/10) 提交本版本改进。

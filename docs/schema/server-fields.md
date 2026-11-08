@@ -710,7 +710,7 @@ Admin API 由同一 Server 提供，路径 `/admin/v1`；通过 `/admin` Web 路
 { "api": "online", "database": "online", "uptime_seconds": 120 }
 ```
 
-数据库不可用时 HTTP 503，`database` 为 `unavailable`。字段：`api` 当前固定 `online`；`database` 为 `online | unavailable`；`uptime_seconds` 为整数。
+数据库不可用，或无法查询 Admin 会话撤销状态时，返回 HTTP 503，`database` 为 `unavailable`。字段：`api` 当前固定 `online`；`database` 为 `online | unavailable`；`uptime_seconds` 为整数。撤销状态无法确认时，其他 Admin API 也会返回 503，不会放行请求。
 
 ### 5.3 `GET /admin/v1/logs`
 

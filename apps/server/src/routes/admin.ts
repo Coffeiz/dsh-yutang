@@ -125,7 +125,17 @@ export function registerAdminRoutes(app: FastifyInstance, pool: pg.Pool, config:
     }
     if (request.url.startsWith("/admin/v1/") && request.url.split("?")[0] !== "/admin/v1/login") {
       reply.header("Cache-Control", "no-store");
-      if (!await validAdminSession(sessionToken(request.headers.authorization, request.headers.cookie), config, pool)) return reply.code(401).send({ error: "Unauthorized" });
+      let valid = false;
+      try {
+        valid = await validAdminSession(sessionToken(request.headers.authorization, request.headers.cookie), config, pool);
+      } catch (error) {
+        request.log.error({ errName: error instanceof Error ? error.name : "UnknownError" }, "Admin session revocation check failed");
+        if (request.method === "GET" && request.url.split("?")[0] === "/admin/v1/status") {
+          return reply.code(503).send({ api: "online", database: "unavailable", uptime_seconds: Math.floor(process.uptime()) });
+        }
+        return reply.code(503).send({ error: "Service unavailable" });
+      }
+      if (!valid) return reply.code(401).send({ error: "Unauthorized" });
     }
   });
   app.post("/admin/v1/logout", async (request, reply) => {
