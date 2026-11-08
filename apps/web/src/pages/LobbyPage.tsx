@@ -123,13 +123,14 @@ function readBrowserNavigation(): BrowserNavigation {
     if (view !== 'discovery' && typeof stored.topicId === 'string' && !recentTopics.some(topic => topic.topicId === stored.topicId)) {
       recentTopics.push({ topicId: stored.topicId, visitedAt: new Date().toISOString() });
     }
-    recentTopics.sort((a, b) => b.visitedAt.localeCompare(a.visitedAt));
+    recentTopics.sort((a, b) => a.visitedAt.localeCompare(b.visitedAt));
+    recentChannels.sort((a, b) => a.visitedAt.localeCompare(b.visitedAt));
     return {
       view,
       topicId: typeof stored.topicId === 'string' ? stored.topicId : null,
       channelId: typeof stored.channelId === 'string' ? stored.channelId : null,
-      recentTopics: recentTopics.slice(0, RECENT_TOPIC_LIMIT),
-      recentChannels,
+      recentTopics: recentTopics.slice(-RECENT_TOPIC_LIMIT),
+      recentChannels: recentChannels.slice(-RECENT_CHANNEL_LIMIT),
     };
   } catch {
     return empty;
@@ -149,7 +150,8 @@ function readRecentChannelSnapshots(): RecentChannelDetails[] {
       && item.topic && typeof item.topic === 'object'
       && typeof item.topic.id === 'string' && typeof item.topic.name === 'string'
       && typeof item.topic.default_channel_id !== 'undefined'))
-      .slice(0, 6);
+      .sort((a, b) => a.visitedAt.localeCompare(b.visitedAt))
+      .slice(-6);
   } catch {
     return [];
   }
@@ -157,6 +159,16 @@ function readRecentChannelSnapshots(): RecentChannelDetails[] {
 
 function writeRecentChannelSnapshots(snapshots: RecentChannelDetails[]) {
   try { window.localStorage.setItem(RECENT_CHANNEL_CACHE_KEY, JSON.stringify(snapshots.slice(0, 6))); } catch { /* Storage is optional. */ }
+}
+
+function recordFirstVisit<T extends { visitedAt: string }, K>(items: T[], item: T, getKey: (value: T) => K, limit: number): T[] {
+  const key = getKey(item);
+  const previous = items.find(current => getKey(current) === key);
+  const next = [...items.filter(current => getKey(current) !== key), {
+    ...item,
+    visitedAt: previous?.visitedAt ?? item.visitedAt,
+  } as T];
+  return next.sort((a, b) => a.visitedAt.localeCompare(b.visitedAt)).slice(-limit);
 }
 
 function topicInitial(name: string) {
@@ -384,15 +396,16 @@ function App() {
   };
 
   const rememberRecentChannel = (channel: Channel, topic: Topic, visitedAt: string) => {
+    const previous = readRecentChannelSnapshots().find(item => item.channel.id === channel.id);
     const detail: RecentChannelDetails = {
       channel: { ...channel, last_activity_at: channel.last_activity_at ?? null, topic: { id: topic.id, name: topic.name } },
       topic,
-      visitedAt,
+      visitedAt: previous?.visitedAt ?? visitedAt,
       cachedAt: new Date().toISOString(),
     };
-    const next = [detail, ...readRecentChannelSnapshots().filter(item => item.channel.id !== channel.id)].slice(0, 6);
+    const next = recordFirstVisit(readRecentChannelSnapshots(), detail, item => item.channel.id, 6);
     writeRecentChannelSnapshots(next);
-    setRecentChannelDetails(current => [detail, ...current.filter(item => item.channel.id !== channel.id)].slice(0, 6));
+    setRecentChannelDetails(current => recordFirstVisit(current, detail, item => item.channel.id, 6));
     return detail;
   };
 
@@ -594,10 +607,8 @@ function App() {
           setView('channel');
           const visitedAt = new Date().toISOString();
           rememberRecentChannel(initialChannel, selectedTopic, visitedAt);
-          const recentChannels = [
-            { topicId: selectedTopic.id, channelId: initialChannel.id, visitedAt },
-            ...navigationRef.current.recentChannels.filter(item => item.channelId !== initialChannel.id),
-          ].slice(0, RECENT_CHANNEL_LIMIT);
+          const recentChannels = recordFirstVisit(navigationRef.current.recentChannels,
+            { topicId: selectedTopic.id, channelId: initialChannel.id, visitedAt }, item => item.channelId, RECENT_CHANNEL_LIMIT);
           commitNavigation({ ...navigationRef.current, view: 'channel', topicId: selectedTopic.id, channelId: initialChannel.id, recentChannels });
         } else {
           setSelectedChannel(null);
@@ -1093,14 +1104,11 @@ function App() {
     setChannelQuery('');
     setMessageQuery('');
     const visitedAt = new Date().toISOString();
-    const recentTopics = [
-      { topicId: topic.id, visitedAt },
-      ...navigationRef.current.recentTopics.filter(item => item.topicId !== topic.id),
-    ].slice(0, RECENT_TOPIC_LIMIT);
-    const recentChannels = defaultChannel ? [
-      { topicId: topic.id, channelId: defaultChannel.id, visitedAt },
-      ...navigationRef.current.recentChannels.filter(item => item.channelId !== defaultChannel.id),
-    ].slice(0, RECENT_CHANNEL_LIMIT) : navigationRef.current.recentChannels;
+    const recentTopics = recordFirstVisit(navigationRef.current.recentTopics,
+      { topicId: topic.id, visitedAt }, item => item.topicId, RECENT_TOPIC_LIMIT);
+    const recentChannels = defaultChannel ? recordFirstVisit(navigationRef.current.recentChannels,
+      { topicId: topic.id, channelId: defaultChannel.id, visitedAt }, item => item.channelId, RECENT_CHANNEL_LIMIT)
+      : navigationRef.current.recentChannels;
     if (defaultChannel) rememberRecentChannel(defaultChannel, topic, visitedAt);
     railTopicCacheRef.current.set(topic.id, topic);
     commitNavigation({ ...navigationRef.current, view: defaultChannel ? 'channel' : 'topic', topicId: topic.id, channelId: defaultChannel?.id ?? null, recentTopics, recentChannels });
@@ -1110,14 +1118,10 @@ function App() {
     if (!selectedTopic) return;
     setShowHelp(false);
     const visitedAt = new Date().toISOString();
-    const recentTopics = [
-      { topicId: selectedTopic.id, visitedAt },
-      ...navigationRef.current.recentTopics.filter(item => item.topicId !== selectedTopic.id),
-    ].slice(0, RECENT_TOPIC_LIMIT);
-    const recentChannels = [
-      { topicId: selectedTopic.id, channelId: channel.id, visitedAt },
-      ...navigationRef.current.recentChannels.filter(item => item.channelId !== channel.id),
-    ].slice(0, RECENT_CHANNEL_LIMIT);
+    const recentTopics = recordFirstVisit(navigationRef.current.recentTopics,
+      { topicId: selectedTopic.id, visitedAt }, item => item.topicId, RECENT_TOPIC_LIMIT);
+    const recentChannels = recordFirstVisit(navigationRef.current.recentChannels,
+      { topicId: selectedTopic.id, channelId: channel.id, visitedAt }, item => item.channelId, RECENT_CHANNEL_LIMIT);
     rememberRecentChannel(channel, selectedTopic, visitedAt);
     railTopicCacheRef.current.set(selectedTopic.id, selectedTopic);
     if (channel.id !== selectedChannel?.id) setMessagesLoading(!messageCacheRef.current.has(channel.id));
@@ -1160,14 +1164,10 @@ function App() {
     setView('topic');
     setShowChannels(false);
     const visitedAt = new Date().toISOString();
-    const recentTopics = [
-      { topicId: recent.topic.id, visitedAt },
-      ...navigationRef.current.recentTopics.filter(item => item.topicId !== recent.topic.id),
-    ].slice(0, RECENT_TOPIC_LIMIT);
-    const recentChannels = [
-      { topicId: recent.topic.id, channelId: recent.channel.id, visitedAt },
-      ...navigationRef.current.recentChannels.filter(item => item.channelId !== recent.channel.id),
-    ].slice(0, RECENT_CHANNEL_LIMIT);
+    const recentTopics = recordFirstVisit(navigationRef.current.recentTopics,
+      { topicId: recent.topic.id, visitedAt }, item => item.topicId, RECENT_TOPIC_LIMIT);
+    const recentChannels = recordFirstVisit(navigationRef.current.recentChannels,
+      { topicId: recent.topic.id, channelId: recent.channel.id, visitedAt }, item => item.channelId, RECENT_CHANNEL_LIMIT);
     rememberRecentChannel(recent.channel, recent.topic, visitedAt);
     commitNavigation({ ...navigationRef.current, view: 'topic', topicId: recent.topic.id, channelId: null, recentTopics, recentChannels });
   };
