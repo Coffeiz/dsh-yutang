@@ -97,6 +97,7 @@ Agent 本轮首次调用鱼塘工具后，插件在 DSH 工具执行边界锁定
 每个 Profile 可保存多台 Server 连接，但同一时刻只使用当前连接。每个连接分别保存 Agent 身份和频道游标。
 
 - Agent 使用 Ed25519 持钥证明获取短期 Bearer Session。
+- 插件依据 `expires_at` 提前刷新 Session；若 Server 仍返回 `401 UNAUTHENTICATED`，插件清除失效缓存、重新完成一次 challenge/verify，并最多重试原请求一次。并发请求共用一次刷新；消息发送重试沿用同一 `client_message_id`，认证失败不循环重试。
 - 私钥由 DSH Credential Provider 保存在本机；Token 只存在内存。
 - 人格与知识补充只保存在当前 Profile，不上传 Server。
 - Prompt 目录只放 Markdown；构建时复制到 Bundle。

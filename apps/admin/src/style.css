@@ -172,8 +172,35 @@ button.danger { background:#9f343d; }
 }
 
 /* Admin page frame: anchor each title at the top of the workspace. */
-.admin-shell { align-items:start; }
-.dashboard { box-sizing:border-box; align-self:start; margin:0 auto; padding-top:0; }
+.admin-shell { align-items:stretch; }
+.dashboard { box-sizing:border-box; display:flex; min-height:100vh; align-self:stretch; flex-direction:column; margin:0 auto; padding-top:0; }
+.dashboard > .panel:last-child { min-height:0; flex:1; }
+.dashboard > .panel:last-child > .table-wrap { min-height:0; max-height:none; flex:1; }
+.dashboard > .health-page,.dashboard > .jury-layout { min-height:0; flex:1; }
+.dashboard > .jury-layout { align-items:stretch; }
+.log-panel { display:flex; min-height:0; flex-direction:column; }
+.log-panel .panel-head { align-items:flex-start; }
+.log-toolbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:8px; }
+.log-search { max-width:280px; }
+.log-count { margin:12px 0 0; color:var(--yt-text-muted); font-size:11px; }
+.log-table-wrap { margin-top:8px; }
+.diagnostic-log-table { table-layout:fixed; }
+.diagnostic-log-table th:nth-child(1) { width:58px; }
+.diagnostic-log-table th:nth-child(2) { width:132px; }
+.diagnostic-log-table td { white-space:normal; vertical-align:top; }
+.log-source { display:inline-block; padding:2px 7px; border-radius:5px; color:var(--yt-brand-hard); background:var(--yt-accent-soft); font-size:10px; font-weight:700; }
+.log-time { color:var(--yt-text-muted); font-size:11px; white-space:nowrap!important; }
+.log-main { color:var(--yt-text-primary); font:12px/1.6 ui-monospace,monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
+.log-main strong { color:var(--yt-text-primary); }
+.log-error .log-main strong { color:#ff8c92; }
+.log-warn .log-main strong { color:#e8bb66; }
+.http-status { display:inline-block; margin-left:5px; padding:1px 6px; border:1px solid var(--yt-border-subtle); border-radius:5px; font:600 10px/1.6 ui-sans-serif,sans-serif; }
+.http-status-2xx,.http-status-3xx { color:#77d8ac!important; background:rgba(50,180,125,.08); }
+.http-status-4xx { color:#e8bb66!important; background:rgba(232,187,102,.08); }
+.http-status-5xx { color:#ff8c92!important; background:rgba(255,100,110,.09); }
+.log-meta { display:flex; flex-wrap:wrap; gap:4px 12px; margin-top:5px; color:var(--yt-text-muted); font-size:10px; }
+.log-meta code { color:var(--yt-text-secondary); font:10px ui-monospace,monospace; overflow-wrap:anywhere; }
+@media(max-width:768px) { .log-panel .panel-head { flex-direction:column; } .log-toolbar { width:100%; justify-content:flex-start; } .log-search { max-width:none; flex:1 1 180px; } .diagnostic-log-table th:nth-child(1) { width:52px; } .diagnostic-log-table th:nth-child(2) { width:112px; } }
 .admin-topbar { position:sticky; z-index:4; top:0; min-height:104px; margin:0 0 24px; padding:22px 0 16px; border-bottom:1px solid var(--yt-border-subtle); background:var(--yt-bg-canvas); }
 .admin-topbar > button { flex:0 0 auto; }
 

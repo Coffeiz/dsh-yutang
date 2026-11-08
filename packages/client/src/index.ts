@@ -103,10 +103,34 @@ export async function createRealtimeTicket({ signal }: RequestOptions = {}) {
 type AgentRequestOptions = { signal?: AbortSignal; idempotencyKey?: string };
 type AgentMe = { id: string; name: string; avatar_url: string | null; scopes: string[] };
 type AgentRegistration = { agent_id: string; owner_id: string; name: string; scopes: string[] };
+const retryableTransportCodes = new Set(['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT']);
+
+function transportCause(error: unknown) {
+  let current = error;
+  const seen = new Set<unknown>();
+  let code: string | undefined;
+  let message: string | undefined;
+  while (current && typeof current === 'object' && !seen.has(current)) {
+    seen.add(current);
+    const value = current as { code?: unknown; message?: unknown; cause?: unknown; name?: unknown };
+    if (!code && typeof value.code === 'string' && /^[A-Z0-9_]+$/u.test(value.code)) code = value.code;
+    if (typeof value.message === 'string') message = value.message
+      ? value.message.replace(/https?:\/\/\S+/giu, '[url]').replace(/[\r\n\t]+/gu, ' ').slice(0, 160)
+      : message;
+    current = value.cause;
+  }
+  return { code, message };
+}
+
+function isRetryableTransportError(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.status === undefined && typeof error.code === 'string' && retryableTransportCodes.has(error.code);
+}
+
 /** Server API for a single Profile Agent. Token and Ed25519 key material stay in the caller's local store. */
 export class YutangApi {
   readonly baseUrl: string;
   private token: string | undefined;
+  private unauthorizedRecovery: ((rejectedToken: string, signal?: AbortSignal) => Promise<string>) | undefined;
 
   constructor(baseUrl: string, token?: string, private readonly fetcher: typeof fetch = fetch) {
     const parsed = new URL(baseUrl);
@@ -118,17 +142,34 @@ export class YutangApi {
   }
 
   setToken(token: string | undefined) { this.token = token; }
+  setUnauthorizedRecovery(recovery: ((rejectedToken: string, signal?: AbortSignal) => Promise<string>) | undefined) {
+    this.unauthorizedRecovery = recovery;
+  }
 
   async request<T>(path: string, init: RequestInit = {}, options: AgentRequestOptions = {}): Promise<T> {
     let response: Response;
-    const headers = new Headers(init.headers);
-    headers.set('Accept', 'application/json');
-    if (this.token) headers.set('Authorization', `Bearer ${this.token}`);
-    if (options.idempotencyKey) headers.set('Idempotency-Key', options.idempotencyKey);
-    try { response = await this.fetcher(new URL(path, `${this.baseUrl}/`), { ...init, headers, signal: options.signal ?? init.signal }); }
-    catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') throw error;
-      throw new ApiError('无法连接鱼塘 Server，请检查地址和连接状态。');
+    const signal = options.signal ?? init.signal ?? undefined;
+    let refreshed = false;
+    while (true) {
+      const headers = new Headers(init.headers);
+      headers.set('Accept', 'application/json');
+      if (this.token) headers.set('Authorization', `Bearer ${this.token}`);
+      else headers.delete('Authorization');
+      if (options.idempotencyKey) headers.set('Idempotency-Key', options.idempotencyKey);
+      try { response = await this.fetcher(new URL(path, `${this.baseUrl}/`), { ...init, headers, signal }); }
+      catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') throw error;
+        const detail = transportCause(error);
+        const description = [detail.code, detail.message].filter(Boolean).join(': ');
+        throw new ApiError(`无法连接鱼塘 Server，请检查地址和连接状态。${description ? ` (${description})` : ''}`, undefined, detail.code);
+      }
+
+      const rejectedToken = this.token;
+      if (response.status !== 401 || refreshed || !rejectedToken || !this.unauthorizedRecovery) break;
+      refreshed = true;
+      const replacement = await this.unauthorizedRecovery(rejectedToken, signal);
+      if (!replacement || replacement === rejectedToken) break;
+      this.token = replacement;
     }
     const contentType = response.headers.get('content-type') ?? '';
     const body: unknown = contentType.toLowerCase().includes('application/json') ? await response.json().catch(() => null) : null;
@@ -180,7 +221,23 @@ export class YutangApi {
   createChannel(topicId: string, name: string, options: AgentRequestOptions) { return this.request<ApiData<Channel>>(`/v1/agent/topics/${encodeURIComponent(topicId)}/channels`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) }, options); }
   setMembership(channelId: string, joined: boolean, options: AgentRequestOptions = {}) { return this.request<ApiData<{ channel_id: string; agent_id: string; joined: boolean }>>(`/v1/agent/channels/${encodeURIComponent(channelId)}/membership`, { method: joined ? 'PUT' : 'DELETE' }, options); }
   listMessages(channelId: string, query: MessageQuery = {}) { return this.request<ApiList<PublicMessage>>(`/v1/channels/${encodeURIComponent(channelId)}/messages${queryString({ after_seq: query.afterSeq, before_seq: query.beforeSeq, limit: query.limit ?? 25 })}`, { signal: query.signal }); }
-  sendMessage(channelId: string, body: { client_message_id: string; content: string; reply_to_id: string | null; mention_ids: string[] }, options: AgentRequestOptions = {}) { return this.request<ApiData<PublicMessage>>(`/v1/channels/${encodeURIComponent(channelId)}/messages`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, options); }
+  async sendMessage(channelId: string, body: { client_message_id: string; content: string; reply_to_id: string | null; mention_ids: string[] }, options: AgentRequestOptions = {}) {
+    const path = `/v1/channels/${encodeURIComponent(channelId)}/messages`;
+    const init = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+    try {
+      return await this.request<ApiData<PublicMessage>>(path, init, options);
+    } catch (error) {
+      if (!isRetryableTransportError(error) || options.signal?.aborted) throw error;
+      // The Server deduplicates this immutable client_message_id in the same transaction as the write.
+      try {
+        return await this.request<ApiData<PublicMessage>>(path, init, options);
+      } catch (retryError) {
+        const firstFailure = error instanceof Error ? error.message : '未知传输错误';
+        const retryFailure = retryError instanceof Error ? retryError.message : '未知重试错误';
+        throw new ApiError(`消息发送状态未知；请先读取目标频道确认是否已发送，再决定是否重发。（首次请求：${firstFailure}；自动重试：${retryFailure}）`, undefined, 'MESSAGE_DELIVERY_UNKNOWN');
+      }
+    }
+  }
   report(input: { target_type: 'topic' | 'channel' | 'message'; target_id: string; reason: string }, options: AgentRequestOptions = {}) { return this.request<ApiData<{ case_id: string; status: string; duplicate: boolean }>>('/v1/agent/moderation/reports', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }, options); }
   listModerationAssignments(options: AgentRequestOptions = {}) {
     return this.request<ApiData<Array<{

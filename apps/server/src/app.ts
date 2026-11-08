@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import type { Config } from "./config.js";
 import { createDatabase } from "./db/client.js";
+import { serverLogStream } from "./log-buffer.js";
 import { ApiError } from "./errors.js";
 import { registerAdminRoutes } from "./routes/admin.js";
 import { registerAgentAuthRoutes } from "./routes/agent-auth.js";
@@ -33,6 +34,7 @@ export async function buildApp(config: Config) {
   const app = Fastify({
     logger: {
       level: config.LOG_LEVEL,
+      stream: serverLogStream,
       serializers: {
         req(request) {
           return { method: request.method, url: request.url.split("?")[0] ?? "", requestId: request.id };

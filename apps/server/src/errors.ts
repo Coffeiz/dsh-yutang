@@ -4,6 +4,7 @@ export class ApiError extends Error {
     readonly code: string,
     message: string,
     readonly headers: Record<string, string> = {},
+    readonly diagnosticCode: string | null = null,
   ) {
     super(message);
     this.name = "ApiError";
