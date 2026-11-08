@@ -3,6 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { VirtualTopicGrid } from '../components/VirtualTopicGrid';
 import { MessageMarkdown } from '../components/MessageMarkdown';
 import { getAgentIdentityColor } from '../components/agentIdentity';
+import { channelHeaderTitle, latestRecentChannels, normalizeRecentChannels, type RecentChannelRef } from '../navigation-history.js';
 import {
   ApiError,
   createRealtimeTicket,
@@ -25,9 +26,8 @@ import {
 type LoadState = 'idle' | 'loading' | 'ready' | 'error';
 type RealtimeState = 'idle' | 'connecting' | 'connected' | 'reconnecting';
 type NavigationView = 'discovery' | 'topic' | 'channel';
-type RecentChannel = { topicId: string; channelId: string; visitedAt: string };
 type RecentTopic = { topicId: string; visitedAt: string };
-type BrowserNavigation = { view: NavigationView; topicId: string | null; channelId: string | null; recentTopics: RecentTopic[]; recentChannels: RecentChannel[] };
+type BrowserNavigation = { view: NavigationView; topicId: string | null; channelId: string | null; recentTopics: RecentTopic[]; recentChannels: RecentChannelRef[] };
 type RecentChannelDetails = { channel: ChannelDetails; topic: Topic; visitedAt: string; cachedAt: string };
 type CachedChannelMessages = { messages: PublicMessage[]; hasOlderMessages: boolean; scrollTop: number };
 
@@ -107,11 +107,7 @@ function readBrowserNavigation(): BrowserNavigation {
     if (!value || typeof value !== 'object') return empty;
     const stored = value as Partial<BrowserNavigation>;
     const view = stored.view === 'topic' || stored.view === 'channel' ? stored.view : 'discovery';
-    const recentChannels = Array.isArray(stored.recentChannels)
-      ? stored.recentChannels.filter((item): item is RecentChannel => Boolean(item && typeof item === 'object'
-        && typeof item.topicId === 'string' && typeof item.channelId === 'string' && typeof item.visitedAt === 'string'))
-        .slice(0, RECENT_CHANNEL_LIMIT)
-      : [];
+    const recentChannels = normalizeRecentChannels(stored.recentChannels, RECENT_CHANNEL_LIMIT);
     const storedRecentTopics = Array.isArray(stored.recentTopics)
       ? stored.recentTopics.filter((item): item is RecentTopic => Boolean(item && typeof item === 'object'
         && typeof item.topicId === 'string' && typeof item.visitedAt === 'string'))
@@ -348,9 +344,8 @@ function App() {
   const [highlightedReplyTarget, setHighlightedReplyTarget] = useState<string | null>(null);
   const [newMessageCount, setNewMessageCount] = useState(0);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
-  const headerChannelName = view === 'discovery'
-    ? '发现频道'
-    : displayChannel?.name ?? (selectedTopic ? channelsState === 'loading' ? '正在加载频道…' : '选择频道' : '鱼塘');
+  const headerChannelName = channelHeaderTitle(view, selectedChannel?.name, selectedTopic?.name, channelsState === 'loading');
+  const headerSearchChannel = selectedChannel?.id === displayChannel?.id ? displayChannel : null;
   const showTopicsLoading = useDelayedFlag(discoveryTopicsState === 'loading', LOADING_FEEDBACK_DELAY_MS, `${topicQuery}:${topicsRefresh}`);
   const showChannelsLoading = useDelayedFlag(channelsState === 'loading', LOADING_FEEDBACK_DELAY_MS, `${selectedTopic?.id ?? ''}:${channelQuery}:${channelsRefresh}`);
   const showMessagesLoading = useDelayedFlag(messagesLoading, LOADING_FEEDBACK_DELAY_MS, selectedChannel?.id ?? '');
@@ -714,7 +709,7 @@ function App() {
       return;
     }
     const controller = new AbortController();
-    const recent = recentChannelRefs.slice(0, 6);
+    const recent = latestRecentChannels(recentChannelRefs, 6);
     const cachedById = new Map(readRecentChannelSnapshots().map(item => [item.channel.id, item]));
     const cachedDetails = recent.flatMap(item => {
       const cached = cachedById.get(item.channelId);
@@ -1093,6 +1088,7 @@ function App() {
 
   const chooseTopic = (topic: Topic) => {
     setShowHelp(false);
+    setShowSearch(false);
     restorePendingRef.current = false;
     pendingChannelIdRef.current = null;
     const knownChannels = selectedTopic?.id === topic.id ? channels : [];
@@ -1120,6 +1116,7 @@ function App() {
   const chooseChannel = (channel: Channel) => {
     if (!selectedTopic) return;
     setShowHelp(false);
+    setShowSearch(false);
     const visitedAt = new Date().toISOString();
     const recentTopics = recordFirstVisit(navigationRef.current.recentTopics,
       { topicId: selectedTopic.id, visitedAt }, item => item.topicId, RECENT_TOPIC_LIMIT);
@@ -1158,6 +1155,7 @@ function App() {
 
   const openRecentChannel = (recent: RecentChannelDetails) => {
     setShowHelp(false);
+    setShowSearch(false);
     restorePendingRef.current = false;
     pendingChannelIdRef.current = recent.channel.id;
     setSelectedChannel(null);
@@ -1275,19 +1273,19 @@ function App() {
 
       {showChannels && <button className="sidebar-backdrop" aria-label="关闭导航栏" onClick={() => setShowChannels(false)} />}
 
-      <section className="chat-panel" aria-label={showHelp ? '鱼塘帮助' : view === 'discovery' ? '发现频道' : displayChannel ? `${displayChannel.name}频道消息` : '公开聊天'}>
+      <section className="chat-panel" aria-label={showHelp ? '鱼塘帮助' : view === 'discovery' ? '发现频道' : selectedChannel ? `${selectedChannel.name}频道消息` : '公开聊天'}>
         {showHelp ? <header className="channel-header help-header">
           <span className="header-hash"><Icon name="ri-question-line" /></span>
           <strong className="header-channel-name">鱼塘帮助</strong>
           <button className="icon-button help-close" aria-label="返回鱼塘" title="返回鱼塘" onClick={() => setShowHelp(false)}><Icon name="ri-close-line" /></button>
-        </header> : <header className={`channel-header ${showSearch && displayChannel ? 'channel-header-search-open' : ''}`}>
+        </header> : <header className={`channel-header ${showSearch && headerSearchChannel ? 'channel-header-search-open' : ''}`}>
           {view !== 'discovery' && <button className="mobile-channel-toggle icon-button" aria-label="打开频道列表" onClick={() => { setShowMembers(false); setShowChannels(true); }}><Icon name="ri-menu-2-line" /></button>}
           <span className="header-hash"><Icon name={view === 'discovery' ? 'ri-compass-3-line' : 'ri-hashtag'} /></span>
           <strong className="header-channel-name">{headerChannelName}</strong>
           <div className="header-actions">
-            {showSearch && displayChannel
-              ? <div className="message-search" role="search"><Icon name="ri-search-line" /><input ref={messageSearchRef} value={messageQuery} onChange={event => setMessageQuery(event.target.value)} placeholder={`搜索 #${displayChannel.name} 中已加载的消息`} aria-label="搜索当前频道已加载消息" /><kbd>ESC</kbd><button className="message-search-close" aria-label="关闭搜索" onClick={() => { setShowSearch(false); setMessageQuery(''); }}><Icon name="ri-close-line" /></button></div>
-              : displayChannel && <button className="icon-button header-search-button" aria-label="搜索当前频道消息" onClick={() => setShowSearch(true)}><Icon name="ri-search-line" /></button>}
+            {showSearch && headerSearchChannel
+              ? <div className="message-search" role="search"><Icon name="ri-search-line" /><input ref={messageSearchRef} value={messageQuery} onChange={event => setMessageQuery(event.target.value)} placeholder={`搜索 #${headerSearchChannel.name} 中已加载的消息`} aria-label="搜索当前频道已加载消息" /><kbd>ESC</kbd><button className="message-search-close" aria-label="关闭搜索" onClick={() => { setShowSearch(false); setMessageQuery(''); }}><Icon name="ri-close-line" /></button></div>
+              : headerSearchChannel && <button className="icon-button header-search-button" aria-label="搜索当前频道消息" onClick={() => setShowSearch(true)}><Icon name="ri-search-line" /></button>}
             <button className="icon-button mobile-help-button" aria-label="帮助" title="帮助" onClick={openHelp}><Icon name="ri-question-line" /></button>
             {selectedChannel && view !== 'discovery' && <button className="icon-button mobile-members-button" aria-label="频道成员" aria-expanded={showMembers} aria-controls="mobile-members-panel" onClick={() => { setShowChannels(false); setShowMembers(true); }}><Icon name="ri-group-line" /></button>}
           </div>

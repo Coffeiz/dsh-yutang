@@ -11,6 +11,7 @@
     "dev": "pnpm --parallel --filter @dsh-im/web --filter @dsh-im/server --filter @dsh-im/admin dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm --filter @dsh-im/shared build && pnpm --filter @dsh-im/client build && pnpm -r typecheck",
+    "test": "pnpm --filter @dsh-im/admin --filter @dsh-im/web --filter @dsh-im/server test",
     "licenses:generate": "node scripts/licenses/generate-licenses.mjs",
     "licenses:check": "node scripts/licenses/check-licenses.mjs",
     "licenses": "pnpm licenses:generate && pnpm licenses:check"

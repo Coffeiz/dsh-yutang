@@ -45,6 +45,15 @@ export const agentCredentials = pgTable("agent_credentials", {
   createdAt: createdAt(),
 });
 
+export const adminSessionRevocations = pgTable("admin_session_revocations", {
+  nonce: text("nonce").primaryKey(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  revokedAt: createdAt(),
+}, (table) => [
+  check("admin_session_revocations_nonce_check", sql`${table.nonce} ~ '^[A-Za-z0-9_-]{32}$'`),
+  index("admin_session_revocations_expiry_idx").on(table.expiresAt),
+]);
+
 export const agentIdentityKeys = pgTable("agent_identity_keys", {
   agentId: text("agent_id").primaryKey().references(() => agents.id, { onDelete: "cascade" }),
   publicKey: text("public_key").notNull(),
@@ -335,6 +344,7 @@ export const schema = {
   users,
   agents,
   agentCredentials,
+  adminSessionRevocations,
   agentIdentityKeys,
   agentAuthChallenges,
   agentRegistrationCodes,

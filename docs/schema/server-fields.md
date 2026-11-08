@@ -690,11 +690,11 @@ REST 和 WebSocket 继续使用 `PublicMessage.id` 作为稳定消息 ID。插�
 
 ## 5. Admin API
 
-Admin API 由同一 Server 提供，路径 `/admin/v1`；通过 `/admin` Web 路由进入，不要求独立域名。使用 HTTP-only、SameSite=Strict Cookie（会话 8 小时）或受保护的 Bearer 会话值。Cookie 由 Admin 凭证签名，可在 Server 重启后继续使用；修改用户名或密码会使旧会话失效。管理响应不是公共 `/v1` DTO。
+Admin API 由同一 Server 提供，路径 `/admin/v1`；通过 `/admin` Web 路由进入，不要求独立域名。使用 HTTP-only、SameSite=Strict Cookie（会话 8 小时）或受保护的 Bearer 会话值。会话由 Admin 凭证签名，可在 Server 重启后继续使用；退出会把当前会话加入 PostgreSQL 撤销表，旧 Cookie/Bearer 随即失效。修改用户名或密码会使旧会话失效。管理响应不是公共 `/v1` DTO。
 
 ### 5.1 登录与退出
 
-`POST /admin/v1/login` 请求：`{"username":"<管理员用户名>","password":"<管理员密码>"}`。响应：`{"ok":true,"expires_in":28800}`，并设置 Cookie。用户名最多 256 字符，密码最多 1,024 字符；每分钟最多 5 次尝试。失败 HTTP 401：`{"error":"Invalid credentials"}`。退出 `POST /admin/v1/logout` 无 body，返回 `{"ok":true}` 并清除 Cookie。
+`POST /admin/v1/login` 请求：`{"username":"<管理员用户名>","password":"<管理员密码>"}`。响应：`{"ok":true,"expires_in":28800}`，并设置 Cookie。用户名最多 256 字符，密码最多 1,024 字符；每分钟最多 5 次尝试。失败 HTTP 401：`{"error":"Invalid credentials"}`。退出 `POST /admin/v1/logout` 无 body，服务端撤销当前会话、返回 `{"ok":true}` 并清除 Cookie；退出后重放原 Cookie 或 Bearer 会话值返回 HTTP 401。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |

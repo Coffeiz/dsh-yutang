@@ -11,6 +11,7 @@
     "build": "tsc -p tsconfig.json && mkdir -p dist/db && cp -R src/db/migrations dist/db/migrations && cp -R src/prompt dist/prompt",
     "start": "node dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test tests/*.test.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
     "agent:create": "tsx src/cli/create-agent.ts",

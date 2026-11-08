@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import '../../web/src/styles/tokens.css';
 import './style.css';
 import { SelectPopover } from './SelectPopover';
+import { juryCaseLocation } from './jury-case-location';
 
 const MessageMarkdown = lazy(() => import('../../web/src/components/MessageMarkdown').then(module => ({ default: module.MessageMarkdown })));
 
@@ -62,9 +63,10 @@ function AgentIdentity({ name, id }: { name?: string; id: string }) {
 }
 
 function caseLocation(item: JuryCase) {
+  const location = juryCaseLocation(item);
   return [
-    item.topic_name && `话题：${item.topic_name}`,
-    item.channel_name && `频道：${item.channel_name}`,
+    location.topic.name && `话题：${location.topic.name}`,
+    location.channel.name && `频道：${location.channel.name}`,
   ].filter(Boolean).join(' · ');
 }
 
@@ -83,27 +85,25 @@ function JuryContextMessage({ label, value, recorded, cacheKey }: { label: strin
 
 function JuryTargetEvidence({ item }: { item: JuryCase }) {
   const evidence = evidenceRecord(item.evidence);
+  const location = juryCaseLocation(item);
   if (item.target_type === 'message') {
     return <section className="jury-content-card">
       <div className="jury-content-meta"><strong>{String(evidence.sender_name ?? item.subject_agent_name ?? '未知 Agent')}</strong><time>{typeof evidence.created_at === 'string' ? new Date(evidence.created_at).toLocaleString() : ''}</time></div>
       <div className="jury-evidence-location">
-        <span><b>话题</b>{String(evidence.topic_name ?? item.topic_name ?? '未知话题')}</span><code>{String(evidence.topic_id ?? item.topic_id ?? '—')}</code>
-        <span><b>频道</b>{String(evidence.channel_name ?? item.channel_name ?? '未知频道')}</span><code>{String(evidence.channel_id ?? item.channel_id ?? '—')}</code>
+        <span><b>话题</b>{location.topic.name ?? '未知话题'}</span><code>{location.topic.id ?? '—'}</code>
+        <span><b>频道</b>{location.channel.name ?? '未知频道'}</span><code>{location.channel.id ?? '—'}</code>
       </div>
       <Suspense fallback={<p className="jury-rendering">正在渲染消息…</p>}><MessageMarkdown content={typeof evidence.content === 'string' && evidence.content ? evidence.content : '消息正文为空'} cacheKey={`jury:${item.id}`} /></Suspense>
       {typeof evidence.reply_to_id === 'string' && <p className="jury-evidence-ref">回复消息：{evidence.reply_to_id}</p>}
     </section>;
   }
   if (item.target_type === 'channel' || item.target_type === 'topic') {
-    const title = typeof evidence.name === 'string' ? evidence.name : item.target_id;
-    const topicName = typeof evidence.topic_name === 'string' ? evidence.topic_name : item.topic_name;
-    const topicId = typeof evidence.topic_id === 'string' ? evidence.topic_id : item.topic_id;
-    const channelId = typeof evidence.id === 'string' && item.target_type === 'channel' ? evidence.id : item.channel_id;
-    const channels = Array.isArray(evidence.channels) ? evidence.channels : [];
+    const target = item.target_type === 'channel' ? location.channel : location.topic;
+    const title = target.name ?? item.target_id;
     return <section className="jury-content-card">
       <div className="jury-content-meta"><strong>{title}</strong>{typeof evidence.created_at === 'string' && <time>{new Date(evidence.created_at).toLocaleString()}</time>}</div>
-      {item.target_type === 'channel' ? <div className="jury-evidence-location"><span><b>频道</b>{title}</span><code>{String(channelId ?? item.target_id)}</code><span><b>所属话题</b>{String(topicName ?? '未知话题')}</span><code>{String(topicId ?? '—')}</code></div> : <div className="jury-evidence-location"><span><b>话题</b>{title}</span><code>{String(evidence.id ?? item.target_id)}</code></div>}
-      {channels.length > 0 && <ul className="jury-evidence-channels">{channels.map((channel, index) => { const row = evidenceRecord(channel); return <li key={String(row.id ?? index)}><strong>{String(row.name ?? row.id ?? '频道')}</strong>{typeof row.id === 'string' && <code>{row.id}</code>}</li>; })}</ul>}
+      {item.target_type === 'channel' ? <div className="jury-evidence-location"><span><b>频道</b>{title}</span><code>{location.channel.id ?? item.target_id}</code><span><b>所属话题</b>{location.topic.name ?? '未知话题'}</span><code>{location.topic.id ?? '—'}</code></div> : <div className="jury-evidence-location"><span><b>话题</b>{title}</span><code>{location.topic.id ?? item.target_id}</code></div>}
+      {location.channels.length > 0 && <ul className="jury-evidence-channels">{location.channels.map((channel, index) => <li key={channel.id ?? index}><strong>{channel.name ?? channel.id ?? '频道'}</strong>{channel.id && <code>{channel.id}</code>}</li>)}</ul>}
     </section>;
   }
   return <section className="jury-content-card"><pre>{JSON.stringify(evidence, null, 2)}</pre></section>;
