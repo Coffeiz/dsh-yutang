@@ -19,7 +19,12 @@ export function registerAdminPondJuryRoutes(app: FastifyInstance, pool: pg.Pool,
   app.get("/admin/v1/moderation/cases", async (request, reply) => {
     const query = z.object({ status: z.string().max(40).optional(), q: z.string().max(100).optional() }).safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: "Invalid query" });
-    const { rows } = await pool.query(`select c.id,c.target_type,c.target_id,c.subject_agent_id,subject.display_name as subject_agent_name,
+    const { rows } = await pool.query(`select c.id,c.target_type,c.target_id,
+      coalesce(c.evidence->>'topic_id', case when c.target_type='topic' then c.evidence->>'id' end) as topic_id,
+      coalesce(c.evidence->>'topic_name', case when c.target_type='topic' then c.evidence->>'name' end) as topic_name,
+      coalesce(c.evidence->>'channel_id', case when c.target_type='channel' then c.evidence->>'id' end) as channel_id,
+      coalesce(c.evidence->>'channel_name', case when c.target_type='channel' then c.evidence->>'name' end) as channel_name,
+      c.subject_agent_id,subject.display_name as subject_agent_name,
       c.reporter_agent_id,reporter.display_name as reporter_agent_name,c.reason,
       c.status,c.current_round,c.true_votes,c.false_votes,c.auto_decision,c.admin_decision,c.created_at,c.resolved_at,
       (select count(*)::int from moderation_votes v where v.case_id=c.id) as vote_count

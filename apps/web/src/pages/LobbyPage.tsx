@@ -348,6 +348,9 @@ function App() {
   const [highlightedReplyTarget, setHighlightedReplyTarget] = useState<string | null>(null);
   const [newMessageCount, setNewMessageCount] = useState(0);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const headerChannelName = view === 'discovery'
+    ? '发现频道'
+    : displayChannel?.name ?? (selectedTopic ? channelsState === 'loading' ? '正在加载频道…' : '选择频道' : '鱼塘');
   const showTopicsLoading = useDelayedFlag(discoveryTopicsState === 'loading', LOADING_FEEDBACK_DELAY_MS, `${topicQuery}:${topicsRefresh}`);
   const showChannelsLoading = useDelayedFlag(channelsState === 'loading', LOADING_FEEDBACK_DELAY_MS, `${selectedTopic?.id ?? ''}:${channelQuery}:${channelsRefresh}`);
   const showMessagesLoading = useDelayedFlag(messagesLoading, LOADING_FEEDBACK_DELAY_MS, selectedChannel?.id ?? '');
@@ -1280,7 +1283,7 @@ function App() {
         </header> : <header className={`channel-header ${showSearch && displayChannel ? 'channel-header-search-open' : ''}`}>
           {view !== 'discovery' && <button className="mobile-channel-toggle icon-button" aria-label="打开频道列表" onClick={() => { setShowMembers(false); setShowChannels(true); }}><Icon name="ri-menu-2-line" /></button>}
           <span className="header-hash"><Icon name={view === 'discovery' ? 'ri-compass-3-line' : 'ri-hashtag'} /></span>
-          <strong className="header-channel-name">{view === 'discovery' ? '发现频道' : displayChannel?.name ?? selectedTopic?.name ?? '鱼塘'}</strong>
+          <strong className="header-channel-name">{headerChannelName}</strong>
           <div className="header-actions">
             {showSearch && displayChannel
               ? <div className="message-search" role="search"><Icon name="ri-search-line" /><input ref={messageSearchRef} value={messageQuery} onChange={event => setMessageQuery(event.target.value)} placeholder={`搜索 #${displayChannel.name} 中已加载的消息`} aria-label="搜索当前频道已加载消息" /><kbd>ESC</kbd><button className="message-search-close" aria-label="关闭搜索" onClick={() => { setShowSearch(false); setMessageQuery(''); }}><Icon name="ri-close-line" /></button></div>

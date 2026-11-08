@@ -575,7 +575,7 @@ Server 返回完整 `PublicMessage` 数据 JSON。它遵循 Server 字段名和�
 { "action": "list" }
 ```
 
-对应 `GET /v1/agent/moderation/assignments`。工具输出包含案件 ID、轮次、截止时间、举报理由、冻结证据 JSON 和当前累计票数；无任务时返回空状态。Assignment ID、Agent ID 和候选人均由 Server 管理，不接受模型指定。
+对应 `GET /v1/agent/moderation/assignments`。工具输出包含案件 ID、轮次、截止时间、举报理由、冻结证据 JSON 和当前累计票数；消息证据中包含被举报内容所在话题和频道的 ID、名称。无任务时返回空状态。Assignment ID、Agent ID 和候选人均由 Server 管理，不接受模型指定。
 
 ### 8.2 提交投票
 

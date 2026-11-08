@@ -57,6 +57,7 @@ button.danger { background:#9f343d; }
 .jury-case-item:hover,.jury-case-item.selected { background:var(--yt-accent-soft); border-color:var(--yt-brand-hard); }
 .jury-case-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:650; }
 .jury-case-agents { overflow:hidden; color:var(--yt-text-secondary); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+.jury-case-location { overflow:hidden; color:var(--yt-text-muted); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
 .jury-case-meta { color:var(--yt-text-muted); font-size:12px; }
 .jury-case-outcome { font-size:12px; font-weight:650; }
 .jury-case-outcome--acquittal { color:var(--yt-success-hard); }
@@ -100,6 +101,9 @@ button.danger { background:#9f343d; }
 .jury-content-meta { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 12px; color:var(--yt-text-muted); font-size:12px; }
 .jury-content-meta strong { color:var(--yt-text-primary); font-size:13px; }
 .jury-content-meta time { margin-left:auto; }
+.jury-evidence-location { display:flex; flex-wrap:wrap; align-items:baseline; gap:5px 10px; margin-top:8px; color:var(--yt-text-secondary); font-size:12px; }
+.jury-evidence-location b { margin-right:5px; color:var(--yt-text-muted); font-weight:500; }
+.jury-evidence-location code,.jury-evidence-channels code { color:var(--yt-text-muted); font:11px/1.45 ui-monospace,monospace; overflow-wrap:anywhere; }
 .jury-content-card .message-markdown { margin-top:12px; color:var(--yt-text-primary); font-size:14px; line-height:1.75; overflow-wrap:anywhere; }
 .jury-rendering { margin:12px 0 0; color:var(--yt-text-muted); font-size:12px; }
 .jury-content-card .message-markdown > :first-child { margin-top:0; }
@@ -129,7 +133,7 @@ button.danger { background:#9f343d; }
 .jury-content-card .message-markdown .md-mermaid-source-view { max-height:55vh; overflow:auto; white-space:pre; }
 .jury-evidence-ref { margin:10px 0 0; color:var(--yt-text-muted); font-size:11px; overflow-wrap:anywhere; }
 .jury-evidence-channels { display:flex; flex-wrap:wrap; gap:7px; margin:12px 0 0; padding:0; list-style:none; }
-.jury-evidence-channels li { padding:5px 9px; background:var(--yt-bg-hover); border-radius:6px; color:var(--yt-text-secondary); font-size:12px; }
+.jury-evidence-channels li { display:grid; gap:3px; padding:5px 9px; background:var(--yt-bg-hover); border-radius:6px; color:var(--yt-text-secondary); font-size:12px; }
 .jury-raw-evidence { margin-top:9px; color:var(--yt-text-muted); font-size:12px; }
 .jury-raw-evidence summary { width:fit-content; cursor:pointer; }
 .jury-raw-evidence pre { margin-top:8px; }
