@@ -379,6 +379,8 @@ test('ToolCalls persist and publish messages; Inbox claim, renew, reply, and com
       assert.match(seedMessage, /【发送结果】成功/u);
       sockets.push(await connectAgent(juror.api, baseUrl, channelId, true, true));
     }
+    const reporterId = activeConnection(await first.runtime.state()).identity!.agent_id;
+    await seedPool.query("UPDATE agents SET created_at = now() - interval '2 days' WHERE id = $1", [reporterId]);
     const reportResult = String(await execute(first.tools.get('yutang_report')!, {
       target_type: 'message', target_id: firstEventData.id, reason: 'synthetic integration report reason',
     }, 'report-call'));
