@@ -29,6 +29,7 @@ export interface ServerConnectionState {
   identity: IdentityState | null;
   pending_registration: PendingRegistrationState | null;
   worker_session_id: string | null;
+  active_jury_request_day: string | null;
   read_cursors: Record<string, number>;
   browse_channel_cursor_id: string | null;
   browse_next_run_at: number | null;
@@ -47,14 +48,13 @@ export interface PluginSettings {
   poll_interval_minutes: 5 | 10 | 30 | 60;
   mention_wakeup_enabled: boolean;
   jury_worker_enabled: boolean;
-  channel_creation_enabled: boolean;
   tool_lock_allowed_tools: TurnLockAllowedTool[];
   browse_schedule_mode: BrowseScheduleMode;
   daily_browse_time: string;
   scheduled_session_id: string | null;
 }
 export interface YutangState {
-  version: 5;
+  version: 6;
   active_server_id: string;
   last_yutang_session_id: string | null;
   task_session_selection_set: boolean;
@@ -67,7 +67,7 @@ export const defaultSettings: PluginSettings = {
   social_mode: 'auto', system_prompt_enabled: false, agent_personality: '', knowledge_context: '',
   auto_browse_enabled: false, poll_interval_minutes: 10, mention_wakeup_enabled: false,
   jury_worker_enabled: true,
-  channel_creation_enabled: false, tool_lock_allowed_tools: [],
+  tool_lock_allowed_tools: [],
   browse_schedule_mode: 'off', daily_browse_time: '09:00', scheduled_session_id: null,
 };
 
@@ -88,7 +88,7 @@ const cleanIdentity = (value: unknown): IdentityState | null => {
   return { owner_id: item.owner_id, agent_id: item.agent_id, display_name: item.display_name, public_key: item.public_key, scopes: Array.isArray(item.scopes) ? item.scopes.filter((scope): scope is string => typeof scope === 'string') : [], ...(item.avatar_url !== undefined ? { avatar_url: item.avatar_url } : {}) };
 };
 const connectionIdFor = (serverUrl: string) => `custom-${createHash('sha256').update(serverUrl).digest('hex').slice(0, 20)}`;
-const emptyConnection = (id: string, kind: ServerConnectionState['kind'], name: string, serverUrl: string | null): ServerConnectionState => ({ id, kind, name, server_url: serverUrl, identity: null, pending_registration: null, worker_session_id: null, read_cursors: {}, browse_channel_cursor_id: null, browse_next_run_at: null, last_daily_browse_date: null, curiosity_points: 0, curiosity_next_roll_at: null, curiosity_last_roll_at: null, curiosity_last_roll_value: null });
+const emptyConnection = (id: string, kind: ServerConnectionState['kind'], name: string, serverUrl: string | null): ServerConnectionState => ({ id, kind, name, server_url: serverUrl, identity: null, pending_registration: null, worker_session_id: null, active_jury_request_day: null, read_cursors: {}, browse_channel_cursor_id: null, browse_next_run_at: null, last_daily_browse_date: null, curiosity_points: 0, curiosity_next_roll_at: null, curiosity_last_roll_at: null, curiosity_last_roll_value: null });
 const normalizeConnection = (value: unknown): ServerConnectionState | null => {
   if (!value || typeof value !== 'object') return null;
   const item = value as Partial<ServerConnectionState>;
@@ -102,6 +102,7 @@ const normalizeConnection = (value: unknown): ServerConnectionState | null => {
     identity: cleanIdentity(item.identity),
     pending_registration: item.pending_registration && typeof item.pending_registration === 'object' ? item.pending_registration as PendingRegistrationState : null,
     worker_session_id: typeof item.worker_session_id === 'string' ? item.worker_session_id : null,
+    active_jury_request_day: validDateKey(item.active_jury_request_day),
     read_cursors: validCursors(item.read_cursors),
     browse_channel_cursor_id: typeof item.browse_channel_cursor_id === 'string' ? item.browse_channel_cursor_id : null,
     browse_next_run_at: validTimestamp(item.browse_next_run_at),
@@ -128,10 +129,11 @@ export class StateStore {
     await chmod(dirname(this.path), 0o700);
     try {
       const parsed = JSON.parse(await readFile(this.path, 'utf8')) as Record<string, unknown>;
-      this.state = parsed.version === 5 && Array.isArray(parsed.servers) ? this.fromV5(parsed)
+      this.state = parsed.version === 6 && Array.isArray(parsed.servers) ? this.fromV6(parsed)
+        : parsed.version === 5 && Array.isArray(parsed.servers) ? this.fromV5(parsed)
         : parsed.version === 4 && Array.isArray(parsed.servers) ? this.fromV4(parsed)
           : this.migrateLegacy(parsed);
-      if (parsed.version !== 5) await this.save();
+      if (parsed.version !== 6) await this.save();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('dsh-yutang local state is unreadable');
       this.state = this.initialState();
@@ -159,7 +161,6 @@ export class StateStore {
       auto_browse_enabled: browseScheduleMode !== 'off',
       mention_wakeup_enabled: boolean('mention_wakeup_enabled'),
       jury_worker_enabled: boolean('jury_worker_enabled'),
-      channel_creation_enabled: boolean('channel_creation_enabled'),
       tool_lock_allowed_tools: normalizeTurnLockAllowlist(input.tool_lock_allowed_tools),
       browse_schedule_mode: browseScheduleMode,
       daily_browse_time: dailyBrowseTime,
@@ -174,7 +175,7 @@ export class StateStore {
       ? parsed.active_server_id
       : servers.find(server => server.kind === 'custom' && server.server_url)?.id ?? 'official';
     const settings = this.settingsFrom(parsed.settings);
-    return { version: 5, active_server_id: selected, last_yutang_session_id: null, task_session_selection_set: Boolean(settings.scheduled_session_id), servers, settings, turn_tool_locks: validTurnToolLocks(parsed.turn_tool_locks) };
+    return { version: 6, active_server_id: selected, last_yutang_session_id: null, task_session_selection_set: Boolean(settings.scheduled_session_id), servers, settings, turn_tool_locks: validTurnToolLocks(parsed.turn_tool_locks) };
   }
 
   private fromV5(parsed: Record<string, unknown>): YutangState {
@@ -186,6 +187,15 @@ export class StateStore {
     state.task_session_selection_set = typeof parsed.task_session_selection_set === 'boolean'
       ? parsed.task_session_selection_set
       : Boolean(state.settings.scheduled_session_id);
+    return state;
+  }
+
+  private fromV6(parsed: Record<string, unknown>): YutangState {
+    const state = this.fromV5(parsed);
+    for (const server of state.servers) {
+      const raw = (parsed.servers as Array<Record<string, unknown>>).find(item => item.id === server.id);
+      server.active_jury_request_day = validDateKey(raw?.active_jury_request_day);
+    }
     return state;
   }
 
@@ -201,18 +211,18 @@ export class StateStore {
     const servers = [connection];
     this.ensurePermanentServers(servers);
     const settings = this.settingsFrom(parsed.settings);
-    return { version: 5, active_server_id: connection.id, last_yutang_session_id: null, task_session_selection_set: Boolean(settings.scheduled_session_id), servers, settings, turn_tool_locks: {} };
+    return { version: 6, active_server_id: connection.id, last_yutang_session_id: null, task_session_selection_set: Boolean(settings.scheduled_session_id), servers, settings, turn_tool_locks: {} };
   }
 
   private initialState(): YutangState {
     if (this.officialServerUrl) {
       const official = emptyConnection('official', 'official', '官方服务器', this.officialServerUrl);
-      return { version: 5, active_server_id: official.id, last_yutang_session_id: null, task_session_selection_set: false, servers: [official], settings: { ...defaultSettings }, turn_tool_locks: {} };
+      return { version: 6, active_server_id: official.id, last_yutang_session_id: null, task_session_selection_set: false, servers: [official], settings: { ...defaultSettings }, turn_tool_locks: {} };
     }
     const connection = emptyConnection(connectionIdFor(this.defaultServerUrl), 'custom', '自定义服务器', this.defaultServerUrl);
     const servers = [connection];
     this.ensurePermanentServers(servers);
-    return { version: 5, active_server_id: connection.id, last_yutang_session_id: null, task_session_selection_set: false, servers, settings: { ...defaultSettings }, turn_tool_locks: {} };
+    return { version: 6, active_server_id: connection.id, last_yutang_session_id: null, task_session_selection_set: false, servers, settings: { ...defaultSettings }, turn_tool_locks: {} };
   }
 
   private ensurePermanentServers(servers: ServerConnectionState[]) {
@@ -235,7 +245,7 @@ export class StateStore {
     return privateKey;
   }
 
-  async update(patch: Partial<Pick<ServerConnectionState, 'server_url' | 'identity' | 'pending_registration' | 'worker_session_id' | 'read_cursors' | 'browse_channel_cursor_id' | 'browse_next_run_at' | 'last_daily_browse_date' | 'curiosity_points' | 'curiosity_next_roll_at' | 'curiosity_last_roll_at' | 'curiosity_last_roll_value'>> & { settings?: Partial<PluginSettings>; task_session_selection_set?: boolean }): Promise<YutangState> {
+  async update(patch: Partial<Pick<ServerConnectionState, 'server_url' | 'identity' | 'pending_registration' | 'worker_session_id' | 'active_jury_request_day' | 'read_cursors' | 'browse_channel_cursor_id' | 'browse_next_run_at' | 'last_daily_browse_date' | 'curiosity_points' | 'curiosity_next_roll_at' | 'curiosity_last_roll_at' | 'curiosity_last_roll_value'>> & { settings?: Partial<PluginSettings>; task_session_selection_set?: boolean }): Promise<YutangState> {
     const state = await this.load();
     const active = activeConnection(state);
     Object.assign(active, Object.fromEntries(Object.entries(patch).filter(([key]) => key !== 'settings' && key !== 'task_session_selection_set')));
@@ -248,7 +258,7 @@ export class StateStore {
     return state;
   }
 
-  async updateConnection(id: string, patch: Partial<Pick<ServerConnectionState, 'server_url' | 'identity' | 'pending_registration' | 'worker_session_id' | 'read_cursors' | 'browse_channel_cursor_id' | 'browse_next_run_at' | 'last_daily_browse_date' | 'curiosity_points' | 'curiosity_next_roll_at' | 'curiosity_last_roll_at' | 'curiosity_last_roll_value'>>): Promise<YutangState> {
+  async updateConnection(id: string, patch: Partial<Pick<ServerConnectionState, 'server_url' | 'identity' | 'pending_registration' | 'worker_session_id' | 'active_jury_request_day' | 'read_cursors' | 'browse_channel_cursor_id' | 'browse_next_run_at' | 'last_daily_browse_date' | 'curiosity_points' | 'curiosity_next_roll_at' | 'curiosity_last_roll_at' | 'curiosity_last_roll_value'>>): Promise<YutangState> {
     const state = await this.load();
     const connection = state.servers.find(server => server.id === id);
     if (!connection) throw new Error('找不到此 Server 连接。');

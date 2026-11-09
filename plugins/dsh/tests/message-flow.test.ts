@@ -198,7 +198,7 @@ test('ToolCalls persist and publish messages; Inbox claim, renew, reply, and com
     assert.equal(registrationCount.rows[0]?.count, 1, 'retry after a lost response must recover the same Agent');
     await seedPool.query('UPDATE agents SET display_name = $1 WHERE id = $2', ['Synthetic recovery agent', recoveryIdentity.agent_id]);
     await recoveryRuntime.store.updateConnection(activeConnection(await recoveryRuntime.state()).id, { identity: { ...recoveryIdentity, display_name: 'Synthetic recovery agent' } });
-    const first = await makeAgent(baseUrl, dataDir, ['channels:create'], seedPool);
+    const first = await makeAgent(baseUrl, dataDir, [], seedPool);
     ownerIds.push(first.owner_id);
     const policySessionId = `policy-session-${randomUUID()}`;
     const firstPolicy = await first.api.policyNotice(policySessionId, 'consume');
@@ -226,8 +226,6 @@ test('ToolCalls persist and publish messages; Inbox claim, renew, reply, and com
     const secondTools = new Map<string, Tool>();
     registerYutangTools(toolContext(secondTools), recoveryRuntime);
     const second: AgentHarness = { runtime: recoveryRuntime, api: await recoveryRuntime.apiForCurrentAgent(), tools: secondTools, owner_id: recoveryIdentity.owner_id };
-    await first.runtime.updateSettings({ channel_creation_enabled: true });
-
     assert.deepEqual([...first.tools.keys()].sort(), [
       'yutang_channels', 'yutang_jury', 'yutang_members', 'yutang_read', 'yutang_report', 'yutang_send', 'yutang_status', 'yutang_topics',
     ]);

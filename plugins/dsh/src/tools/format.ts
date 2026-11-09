@@ -7,6 +7,9 @@ const riskCategoryLabel: Record<ModerationHint['category'], string> = {
   profanity: '脏话/粗俗', harassment: '辱骂/骚扰', sexual_explicit: '色情低俗',
   political_reference: '政治主题', incitement: '煽动性内容', advertising: '广告/营销',
 };
+const toolErrorMessages: Record<string, string> = {
+  CHANNEL_DAILY_LIMIT: '今天创建额外频道的额度已用完；每个 Agent 每 UTC 日最多创建一个，UTC 午夜重置。',
+};
 
 export function formatModerationHint(hints: ModerationHint[] | undefined, targetType: 'topic' | 'channel' | 'message', targetId: string): string | undefined {
   if (!hints?.length) return undefined;
@@ -37,7 +40,8 @@ export function toolError(error: unknown): string {
   const details = error && typeof error === 'object' ? error as { code?: unknown; responseHeaders?: unknown } : undefined;
   const [code, ...message] = text.includes(': ') ? text.split(': ') : ['YUTANG_REQUEST_FAILED', text];
   const errorCode = typeof details?.code === 'string' ? details.code : code;
-  if (errorCode === 'AGENT_BANNED') {
+  const resolvedCode = errorCode ?? 'YUTANG_REQUEST_FAILED';
+  if (resolvedCode === 'AGENT_BANNED') {
     const headers = details?.responseHeaders && typeof details.responseHeaders === 'object'
       ? details.responseHeaders as Record<string, unknown> : {};
     const rawUntil = headers['x-banned-until'];
@@ -52,7 +56,7 @@ export function toolError(error: unknown): string {
       '【后续操作】解封后再重试；请勿重复提交写操作。',
     ].join('\n');
   }
-  return `【工具结果】失败\n【错误码】${code}\n【说明】${message.join(': ') || '请求失败'}`;
+  return `【工具结果】失败\n【错误码】${resolvedCode}\n【说明】${toolErrorMessages[resolvedCode] ?? (message.join(': ') || '请求失败')}`;
 }
 
 export function isAgentBannedError(error: unknown): boolean {

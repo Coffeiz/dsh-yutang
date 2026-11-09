@@ -19,7 +19,8 @@ const REALTIME_HEARTBEAT_TIMEOUT_MS = 150_000;
 
 type TurnResult = { kind: 'completed' } | { kind: 'failed'; reason: string };
 type TaskOutcome = { processed: true; replyMessageId?: string };
-type PendingJuryAssignment = { caseId: string; assignmentId: string; deadlineAt: string; serverId: string };
+type PendingJuryAssignment = { caseId: string; assignmentId: string; deadlineAt: string; serverId: string; assignmentSource: 'active_request' | 'background' };
+const utcDateKey = (value = new Date()) => value.toISOString().slice(0, 10);
 
 export class YutangWorker {
   private selectedSessionId: string | undefined;
@@ -74,7 +75,7 @@ export class YutangWorker {
         : this.activeTaskSource === 'mention'
           ? state.settings.social_mode !== 'auto' || !state.settings.mention_wakeup_enabled
           : this.activeTaskSource === 'jury'
-            ? state.settings.social_mode !== 'auto' || !state.settings.jury_worker_enabled
+            ? state.settings.social_mode === 'off'
             : state.settings.social_mode === 'off');
       if (taskDisabled) {
         this.stopActiveMentionLease?.();
@@ -176,7 +177,8 @@ export class YutangWorker {
     }
     const inboxEnabled = state.settings.social_mode === 'auto' && state.settings.mention_wakeup_enabled && Boolean(state.settings.scheduled_session_id);
     const juryEnabled = state.settings.social_mode === 'auto' && state.settings.jury_worker_enabled && Boolean(state.settings.scheduled_session_id);
-    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING) && this.inboxSubscriptionEnabled === inboxEnabled && this.jurySubscriptionEnabled === juryEnabled) return;
+    const activeJuryEnabled = connection.active_jury_request_day === utcDateKey() && Boolean(state.settings.scheduled_session_id);
+    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING) && this.inboxSubscriptionEnabled === inboxEnabled && this.jurySubscriptionEnabled === juryEnabled && this.activeJurySubscriptionEnabled === activeJuryEnabled) return;
     if (this.socket) {
       this.stopHeartbeat();
       this.socket.close(1000, 'inbox subscription changed');
@@ -184,7 +186,7 @@ export class YutangWorker {
       this.inboxSubscriptionEnabled = false;
       this.jurySubscriptionEnabled = false;
     }
-    try { await this.connectRealtime(connection.id, inboxEnabled, juryEnabled); }
+    try { await this.connectRealtime(connection.id, inboxEnabled, juryEnabled, activeJuryEnabled); }
     catch (error) {
       if (!this.stopped && !this.switchingServer) {
         if (!(error instanceof DOMException && error.name === 'AbortError')) this.noteError(error);
@@ -193,7 +195,9 @@ export class YutangWorker {
     }
   }
 
-  private async connectRealtime(serverId: string, inboxEnabled: boolean, juryEnabled: boolean) {
+  private activeJurySubscriptionEnabled = false;
+
+  private async connectRealtime(serverId: string, inboxEnabled: boolean, juryEnabled: boolean, activeJuryEnabled: boolean) {
     if (this.reconnectInProgress || this.stopped) return;
     this.reconnectInProgress = true;
     const controller = new AbortController();
@@ -213,9 +217,10 @@ export class YutangWorker {
         this.reconnectAttempt = 0;
         this.inboxSubscriptionEnabled = inboxEnabled;
         this.jurySubscriptionEnabled = juryEnabled;
+        this.activeJurySubscriptionEnabled = activeJuryEnabled;
         this.runtime.logInfo('Realtime connection opened', { server_id: serverId });
         this.lastHeartbeatAckAt = Date.now();
-        socket.send(JSON.stringify({ type: 'subscribe', inbox: inboxEnabled, jury: juryEnabled }));
+        socket.send(JSON.stringify({ type: 'subscribe', inbox: inboxEnabled, jury: juryEnabled, active_jury: activeJuryEnabled }));
         this.heartbeatTimer = setInterval(() => {
           if (this.socket !== socket || socket.readyState !== WebSocket.OPEN) return;
           if (Date.now() - this.lastHeartbeatAckAt >= REALTIME_HEARTBEAT_TIMEOUT_MS) {
@@ -236,7 +241,7 @@ export class YutangWorker {
         }
         if (frame && typeof frame === 'object' && 'type' in frame
           && (inboxEnabled && (frame.type === 'inbox.changed' || frame.type === 'subscribed')
-            || juryEnabled && (frame.type === 'moderation.assignment.available' || frame.type === 'subscribed'))) this.requestTick();
+            || (juryEnabled || activeJuryEnabled) && (frame.type === 'moderation.assignment.available' || frame.type === 'subscribed'))) this.requestTick();
       });
       socket.addEventListener('close', event => {
         if (this.socket !== socket || this.boundServerId !== serverId) return;
@@ -277,13 +282,16 @@ export class YutangWorker {
     this.tickInProgress = true;
     try {
       let state = await this.runtime.state();
-      if (!activeConnection(state).identity || !['auto', 'lurk'].includes(state.settings.social_mode) || !state.settings.scheduled_session_id) return;
+      const connection = activeConnection(state);
+      const activeJuryRequested = connection.active_jury_request_day === utcDateKey();
+      if (!connection.identity || !state.settings.scheduled_session_id || (!['auto', 'lurk'].includes(state.settings.social_mode) && !(activeJuryRequested && state.settings.social_mode !== 'off'))) return;
       await this.reconcileRealtime();
-      if (state.settings.social_mode === 'auto' && state.settings.jury_worker_enabled) {
-        const serverId = activeConnection(state).id;
+      if (state.settings.social_mode !== 'off' && (state.settings.social_mode === 'auto' && state.settings.jury_worker_enabled || activeJuryRequested)) {
+        const serverId = connection.id;
         await this.refreshJuryAssignments(serverId);
         await this.processJuryQueue();
       }
+      if (!['auto', 'lurk'].includes(state.settings.social_mode)) return;
       if (!this.taskRunning && state.settings.social_mode === 'auto' && state.settings.mention_wakeup_enabled) await this.claimInbox();
       if (this.taskRunning) return;
       state = await this.runtime.state();
@@ -315,8 +323,11 @@ export class YutangWorker {
 
   private async refreshJuryAssignments(expectedServerId: string) {
     const state = await this.runtime.state();
-    if (this.switchingServer || activeConnection(state).id !== expectedServerId || state.settings.social_mode !== 'auto'
-      || !state.settings.jury_worker_enabled || !state.settings.scheduled_session_id) return;
+    const connection = activeConnection(state);
+    const activeRequested = connection.active_jury_request_day === utcDateKey();
+    const backgroundEnabled = state.settings.social_mode === 'auto' && state.settings.jury_worker_enabled;
+    if (this.switchingServer || connection.id !== expectedServerId || state.settings.social_mode === 'off'
+      || (!backgroundEnabled && !activeRequested) || !state.settings.scheduled_session_id) return;
     const api = await this.runtime.apiForCurrentAgent(expectedServerId);
     const response = await api.listModerationAssignments();
     if (activeConnection(await this.runtime.state()).id !== expectedServerId) return;
@@ -329,6 +340,7 @@ export class YutangWorker {
         assignmentId: item.assignment_id,
         deadlineAt: item.deadline_at,
         serverId: expectedServerId,
+        assignmentSource: item.assignment_source,
       });
     }
     for (const [assignmentId, item] of this.pendingJuryAssignments) {
@@ -338,14 +350,19 @@ export class YutangWorker {
 
   private async processJuryQueue(): Promise<boolean> {
     if (this.taskRunning || this.switchingServer || this.stopped) return false;
+    const state = await this.runtime.state();
+    const connection = activeConnection(state);
+    const activeRequested = connection.active_jury_request_day === utcDateKey();
+    const backgroundEnabled = state.settings.social_mode === 'auto' && state.settings.jury_worker_enabled;
     const now = Date.now();
     const pending = [...this.pendingJuryAssignments.values()]
-      .filter(item => Date.parse(item.deadlineAt) > now && (this.juryRetryAt.get(item.assignmentId) ?? 0) <= now)
+      .filter(item => Date.parse(item.deadlineAt) > now && (this.juryRetryAt.get(item.assignmentId) ?? 0) <= now
+        && (item.assignmentSource === 'active_request' ? activeRequested && state.settings.social_mode !== 'off' : backgroundEnabled))
       .sort((left, right) => Date.parse(left.deadlineAt) - Date.parse(right.deadlineAt))[0];
     if (!pending) return false;
     this.pendingJuryAssignments.delete(pending.assignmentId);
     try {
-      await this.runTask(`jury:${pending.assignmentId}`, pending.caseId, 'jury', buildJuryTaskPrompt(pending), pending.serverId, pending.assignmentId);
+      await this.runTask(`jury:${pending.assignmentId}`, pending.caseId, 'jury', buildJuryTaskPrompt(pending), pending.serverId, pending.assignmentId, pending.assignmentSource);
       this.completedJuryAssignments.set(pending.assignmentId, Date.parse(pending.deadlineAt));
       this.juryRetryAt.delete(pending.assignmentId);
     } catch (error) {
@@ -369,7 +386,7 @@ export class YutangWorker {
     return sessionId;
   }
 
-  private async runTask(taskId: string, channelId: string, source: WorkerTaskSource, prompt: string, expectedServerId?: string, assignmentId?: string): Promise<TaskOutcome> {
+  private async runTask(taskId: string, channelId: string, source: WorkerTaskSource, prompt: string, expectedServerId?: string, assignmentId?: string, assignmentSource?: 'active_request' | 'background'): Promise<TaskOutcome> {
     if (this.switchingServer) throw new Error('Server 连接切换中，已暂停后台任务。');
     if (this.taskRunning) throw new Error('worker task is already active');
     this.taskRunning = true;
@@ -399,7 +416,9 @@ export class YutangWorker {
       const settings = state.settings;
       if (source === 'browse' && (!['auto', 'lurk'].includes(settings.social_mode) || settings.browse_schedule_mode === 'off')
         || source === 'mention' && (settings.social_mode !== 'auto' || !settings.mention_wakeup_enabled)
-        || source === 'jury' && (settings.social_mode !== 'auto' || !settings.jury_worker_enabled || !assignmentId)) {
+        || source === 'jury' && (!assignmentId || settings.social_mode === 'off'
+          || assignmentSource === 'active_request' && connection.active_jury_request_day !== utcDateKey()
+          || assignmentSource === 'background' && (settings.social_mode !== 'auto' || !settings.jury_worker_enabled))) {
         throw new Error('worker task disabled by current settings');
       }
       releaseGrant = source === 'jury'

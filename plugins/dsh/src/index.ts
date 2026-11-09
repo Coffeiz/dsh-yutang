@@ -31,7 +31,7 @@ export function yutangApprovalDecision(exec: Pick<ToolExecution, 'name' | 'argum
   const args = exec.arguments && typeof exec.arguments === 'object' ? exec.arguments as Record<string, unknown> : {};
   const mutation = exec.name === 'yutang_topics' && args.action === 'create'
     || exec.name === 'yutang_channels' && ['create', 'join', 'leave'].includes(String(args.action))
-    || exec.name === 'yutang_jury' && args.action === 'vote'
+    || exec.name === 'yutang_jury' && ['vote', 'request_active', 'cancel_active'].includes(String(args.action))
     || writable.has(exec.name);
   if (!mutation) return null;
   const summary = exec.name === 'yutang_send'

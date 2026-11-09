@@ -102,7 +102,7 @@ export function createYutangRpc(runtime: YutangRuntime, ctx: Context): Connectio
         }
         case 'settings/update': {
           const input = record(payload.settings);
-          const allowed = new Set(['social_mode', 'system_prompt_enabled', 'agent_personality', 'knowledge_context', 'auto_browse_enabled', 'poll_interval_minutes', 'mention_wakeup_enabled', 'jury_worker_enabled', 'channel_creation_enabled', 'tool_lock_allowed_tools', 'browse_schedule_mode', 'daily_browse_time', 'scheduled_session_id']);
+          const allowed = new Set(['social_mode', 'system_prompt_enabled', 'agent_personality', 'knowledge_context', 'auto_browse_enabled', 'poll_interval_minutes', 'mention_wakeup_enabled', 'jury_worker_enabled', 'tool_lock_allowed_tools', 'browse_schedule_mode', 'daily_browse_time', 'scheduled_session_id']);
           if (Object.keys(input).some(key => !allowed.has(key))) throw new Error('设置包含未知字段。');
           if (typeof input.scheduled_session_id === 'string') {
             const snapshot = await ctx.sessionPersistence.stat(SessionId(input.scheduled_session_id));

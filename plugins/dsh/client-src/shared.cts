@@ -16,7 +16,6 @@ export type Settings = {
   poll_interval_minutes: 5 | 10 | 30 | 60
   mention_wakeup_enabled: boolean
   jury_worker_enabled: boolean
-  channel_creation_enabled: boolean
   tool_lock_allowed_tools: ('web_search' | 'web_fetch')[]
   browse_schedule_mode: 'off' | 'hourly' | 'daily' | 'curiosity'
   daily_browse_time: string

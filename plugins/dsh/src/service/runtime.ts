@@ -56,6 +56,7 @@ export class YutangRuntime {
     try { await this.settingsChanged?.(); }
     catch (error) { this.logger.warn?.('dsh-yutang settings reconciliation failed', error); }
   }
+  async refreshWorkerSettings() { await this.notifySettingsChanged(); }
   setWorkerStatusReader(reader: () => { worker: string; realtime: string; last_error?: string }) { this.workerStatusReader = reader; }
   workerStatus() { return this.workerStatusReader?.() ?? { worker: 'stopped', realtime: 'disconnected' }; }
   checkTurnToolLock(agentId: string | undefined, turn: number | undefined, toolName: string) {
@@ -364,7 +365,7 @@ export class YutangRuntime {
   async updateSettings(settings: Partial<PluginSettings>) {
     const stringLimits = { agent_personality: 12_000, knowledge_context: 20_000 } as const;
     for (const key of Object.keys(settings)) {
-      if (!['social_mode', 'system_prompt_enabled', 'agent_personality', 'knowledge_context', 'auto_browse_enabled', 'poll_interval_minutes', 'mention_wakeup_enabled', 'jury_worker_enabled', 'channel_creation_enabled', 'tool_lock_allowed_tools', 'browse_schedule_mode', 'daily_browse_time', 'scheduled_session_id'].includes(key)) throw new ApiError('设置包含未知字段。');
+      if (!['social_mode', 'system_prompt_enabled', 'agent_personality', 'knowledge_context', 'auto_browse_enabled', 'poll_interval_minutes', 'mention_wakeup_enabled', 'jury_worker_enabled', 'tool_lock_allowed_tools', 'browse_schedule_mode', 'daily_browse_time', 'scheduled_session_id'].includes(key)) throw new ApiError('设置包含未知字段。');
       const value = settings[key as keyof PluginSettings];
       if (key === 'social_mode' && (typeof value !== 'string' || !['auto', 'lurk', 'manual', 'off'].includes(value))) throw new ApiError('社交模式不受支持。');
       if (key === 'poll_interval_minutes' && (typeof value !== 'number' || ![5, 10, 30, 60].includes(value))) throw new ApiError('巡查间隔不受支持。');
@@ -372,7 +373,7 @@ export class YutangRuntime {
       if (key === 'daily_browse_time' && (typeof value !== 'string' || !/^(?:[01]\d|2[0-3]):[0-5]\d$/u.test(value))) throw new ApiError('每日巡看时间必须是 24 小时制 HH:mm。');
       if (key === 'scheduled_session_id' && value !== null && (typeof value !== 'string' || value.length > 160)) throw new ApiError('定时会话 ID 无效。');
       if (key in stringLimits && (typeof value !== 'string' || value.length > stringLimits[key as keyof typeof stringLimits])) throw new ApiError(`${key} 内容类型无效或超出长度限制。`);
-      if (['system_prompt_enabled', 'auto_browse_enabled', 'mention_wakeup_enabled', 'jury_worker_enabled', 'channel_creation_enabled'].includes(key) && typeof value !== 'boolean') throw new ApiError(`${key} 必须是布尔值。`);
+      if (['system_prompt_enabled', 'auto_browse_enabled', 'mention_wakeup_enabled', 'jury_worker_enabled'].includes(key) && typeof value !== 'boolean') throw new ApiError(`${key} 必须是布尔值。`);
       if (key === 'tool_lock_allowed_tools' && (!Array.isArray(value) || value.some(name => typeof name !== 'string' || !normalizeTurnLockAllowlist([name]).includes(name as never)))) throw new ApiError('工具锁白名单包含不支持的工具。');
     }
     const currentState = await this.store.load();
