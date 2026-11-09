@@ -17,3 +17,7 @@ export function pollRealtimeUpdate(type: string, data: unknown, channelId: strin
   }
   return { refresh: true };
 }
+
+export function shouldMarkPollsUnread(type: string, activeTab: 'members' | 'polls') {
+  return type === 'channel.poll.created' && activeTab !== 'polls';
+}

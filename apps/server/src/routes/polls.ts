@@ -34,7 +34,7 @@ function pollHash(input: z.infer<typeof createBody>) {
 export async function closeExpired(pool: pg.Pool, hub: RealtimeHub) {
   const { rows } = await pool.query<{ id: string; channel_id: string; previous_status: string }>(`with expired as (
       select id,channel_id,status as previous_status from channel_polls
-      where ends_at<=now() and (status in ('open','hidden') or (status='closed' and (closed_at is null or closed_reason is null)))
+      where ends_at<=now() and (status='open' or (status in ('hidden','closed') and (closed_at is null or closed_reason is null)))
       for update
     ), finalized as (
       update channel_polls p set status=case when p.status='open' then 'closed' else p.status end,
@@ -43,6 +43,7 @@ export async function closeExpired(pool: pg.Pool, hub: RealtimeHub) {
       returning p.id,p.channel_id,e.previous_status
     ) select id,channel_id,previous_status from finalized`);
   for (const item of rows) if (item.previous_status === "open") hub.publishChannel(item.channel_id, realtimeEvent("channel.poll.closed", { poll_id: item.id, channel_id: item.channel_id }));
+  return rows.length;
 }
 
 async function pollDto(pool: pg.Pool, row: PollRow, agentId?: string) {

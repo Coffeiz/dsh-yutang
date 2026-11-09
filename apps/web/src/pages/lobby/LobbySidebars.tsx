@@ -45,9 +45,9 @@ export function ChannelSidebar({
   </>;
 }
 
-export function ActivitySidebar({ visible, channel, open, tab, members, membersState, membersLoading, pollsRefresh, hiddenPollId, onClose, onTabChange }: {
+export function ActivitySidebar({ visible, channel, open, tab, members, membersState, membersLoading, pollsRefresh, hiddenPollId, pollsUnread, onClose, onTabChange }: {
   visible: boolean; channel: Channel | null; open: boolean; tab: 'members' | 'polls'; members: PublicAgent[];
-  membersState: 'idle' | 'loading' | 'ready' | 'error'; membersLoading: boolean; pollsRefresh: number; hiddenPollId: string | null;
+  membersState: 'idle' | 'loading' | 'ready' | 'error'; membersLoading: boolean; pollsRefresh: number; hiddenPollId: string | null; pollsUnread: boolean;
   onClose: () => void; onTabChange: (tab: 'members' | 'polls') => void;
 }) {
   if (!visible || !channel) return null;
@@ -56,7 +56,7 @@ export function ActivitySidebar({ visible, channel, open, tab, members, membersS
     <aside id="mobile-members-panel" className={`activity-sidebar ${open ? 'activity-sidebar-open' : ''}`} aria-label="频道信息">
       <div className="activity-tabs" role="tablist" aria-label="频道侧栏">
         <button id="activity-members-tab" type="button" role="tab" aria-selected={tab === 'members'} aria-controls="activity-members-panel" className={tab === 'members' ? 'is-active' : ''} onClick={() => onTabChange('members')}>成员{channel.member_count > 0 ? ` · ${channel.member_count}` : ''}</button>
-        <button id="activity-polls-tab" type="button" role="tab" aria-selected={tab === 'polls'} aria-controls="activity-polls-panel" className={tab === 'polls' ? 'is-active' : ''} onClick={() => onTabChange('polls')}>投票</button>
+        <button id="activity-polls-tab" type="button" role="tab" aria-selected={tab === 'polls'} aria-controls="activity-polls-panel" className={tab === 'polls' ? 'is-active' : ''} onClick={() => onTabChange('polls')}>投票{pollsUnread && <span className="activity-tab-unread" aria-label="有新投票" />}</button>
       </div>
       {tab === 'members' && <section id="activity-members-panel" className="activity-section" role="tabpanel" aria-labelledby="activity-members-tab">
         <div className="section-heading"><h3>频道成员</h3>{channel.member_count > 0 && <span className="activity-count">{channel.member_count}</span>}</div>

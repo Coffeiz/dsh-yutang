@@ -3,7 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { VirtualTopicGrid } from '../components/VirtualTopicGrid';
 import { ChatMessage, dayLabel, HelpPage, Icon, mergeMessages } from './lobby/Presentation';
 import { ActivitySidebar, ChannelSidebar } from './lobby/LobbySidebars';
-import { pollRealtimeUpdate } from './lobby/poll-realtime';
+import { pollRealtimeUpdate, shouldMarkPollsUnread } from './lobby/poll-realtime';
 import { useDelayedFlag, useDelayedRealtimeState, type RealtimeState } from './lobby/useDelayedStatus';
 import { LeaderboardPage } from './LeaderboardPage';
 import { channelHeaderTitle, latestRecentChannels } from '../navigation-history.js';
@@ -82,6 +82,8 @@ function App() {
   const [activityTab, setActivityTab] = useState<'members' | 'polls'>(() => {
     try { return window.localStorage.getItem('dsh-yutang:activity-tab:v1') === 'polls' ? 'polls' : 'members'; } catch { return 'members'; }
   });
+  const activityTabRef = useRef(activityTab);
+  const [unreadPollChannelIds, setUnreadPollChannelIds] = useState<Set<string>>(() => new Set());
   const [pollsRefresh, setPollsRefresh] = useState(0);
   const [hiddenPollId, setHiddenPollId] = useState<string | null>(null);
   const [realtimeState, setRealtimeState] = useState<RealtimeState>('idle');
@@ -697,6 +699,9 @@ function App() {
           }
           const pollUpdate = pollRealtimeUpdate(frame.type, frame.data, displayChannel.id);
           if (pollUpdate) {
+            if (shouldMarkPollsUnread(frame.type, activityTabRef.current)) {
+              setUnreadPollChannelIds(current => new Set(current).add(displayChannel.id));
+            }
             if ('hiddenPollId' in pollUpdate && typeof pollUpdate.hiddenPollId === 'string') setHiddenPollId(pollUpdate.hiddenPollId);
             if ('restoredPollId' in pollUpdate && typeof pollUpdate.restoredPollId === 'string') setHiddenPollId(current => current === pollUpdate.restoredPollId ? null : current);
             setPollsRefresh(value => value + 1);
@@ -1160,9 +1165,18 @@ function App() {
         membersLoading={showMembersLoading}
         pollsRefresh={pollsRefresh}
         hiddenPollId={hiddenPollId}
+        pollsUnread={Boolean(displayChannel && unreadPollChannelIds.has(displayChannel.id))}
         onClose={() => setShowMembers(false)}
         onTabChange={tab => {
+          activityTabRef.current = tab;
           setActivityTab(tab);
+          if (tab === 'polls' && displayChannel) {
+            setUnreadPollChannelIds(current => {
+              const next = new Set(current);
+              next.delete(displayChannel.id);
+              return next;
+            });
+          }
           try { window.localStorage.setItem('dsh-yutang:activity-tab:v1', tab); } catch { /* Storage is optional. */ }
         }}
       />

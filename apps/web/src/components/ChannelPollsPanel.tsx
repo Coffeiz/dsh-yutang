@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { listChannelPolls, type ChannelPoll } from '../api';
+import { createRequestGeneration } from './request-generation';
 
 type Props = { channelId: string; refreshKey?: number; hiddenPollId?: string | null };
 type LoadState = 'loading' | 'ready' | 'error';
@@ -37,8 +38,12 @@ export function ChannelPollsPanel({ channelId, refreshKey = 0, hiddenPollId = nu
   const scrollRef = useRef<HTMLDivElement>(null);
   const loadingRef = useRef(false);
   const refreshKeyRef = useRef(refreshKey);
+  const [requestGeneration] = useState(createRequestGeneration);
 
   const loadFirstPage = useCallback(async (signal?: AbortSignal) => {
+    const generation = requestGeneration.begin();
+    loadingRef.current = false;
+    setLoadingMore(false);
     setState(current => current === 'ready' ? current : 'loading');
     setError('');
     try {
@@ -46,14 +51,14 @@ export function ChannelPollsPanel({ channelId, refreshKey = 0, hiddenPollId = nu
         listChannelPolls(channelId, { status: 'open', limit: 20, signal }),
         listChannelPolls(channelId, { status: 'closed', limit: 20, signal }),
       ]);
-      if (signal?.aborted) return;
+      if (signal?.aborted || !requestGeneration.isCurrent(generation)) return;
       setActive(openResult.data);
       setClosed(closedResult.data);
       setCursor(closedResult.page.next_cursor ?? null);
       setHasMore(closedResult.page.has_more);
       setState('ready');
     } catch (caught) {
-      if (signal?.aborted) return;
+      if (signal?.aborted || !requestGeneration.isCurrent(generation)) return;
       setError(caught instanceof Error ? caught.message : '暂时无法读取投票');
       setState('error');
     }
@@ -67,7 +72,10 @@ export function ChannelPollsPanel({ channelId, refreshKey = 0, hiddenPollId = nu
     setHasMore(false);
     setCursor(null);
     void loadFirstPage(controller.signal);
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      requestGeneration.begin();
+    };
   }, [loadFirstPage]);
 
   useEffect(() => {
@@ -84,10 +92,12 @@ export function ChannelPollsPanel({ channelId, refreshKey = 0, hiddenPollId = nu
 
   const loadMore = useCallback(async () => {
     if (loadingRef.current || !hasMore || !cursor) return;
+    const generation = requestGeneration.current();
     loadingRef.current = true;
     setLoadingMore(true);
     try {
       const result = await listChannelPolls(channelId, { status: 'closed', limit: 20, cursor });
+      if (!requestGeneration.isCurrent(generation)) return;
       setClosed(current => {
         const existing = new Set(current.map(poll => poll.id));
         return [...current, ...result.data.filter(poll => !existing.has(poll.id))];
@@ -95,17 +105,20 @@ export function ChannelPollsPanel({ channelId, refreshKey = 0, hiddenPollId = nu
       setCursor(result.page.next_cursor ?? null);
       setHasMore(result.page.has_more);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : '历史投票加载失败');
+      if (requestGeneration.isCurrent(generation)) setError(caught instanceof Error ? caught.message : '历史投票加载失败');
     } finally {
       loadingRef.current = false;
-      setLoadingMore(false);
+      if (requestGeneration.isCurrent(generation)) setLoadingMore(false);
     }
   }, [channelId, cursor, hasMore]);
 
+  const visibleActive = useMemo(() => active.filter(poll => poll.id !== hiddenPollId), [active, hiddenPollId]);
+  const visibleClosed = useMemo(() => closed.filter(poll => poll.id !== hiddenPollId), [closed, hiddenPollId]);
+
   const rows = useMemo<PollRow[]>(() => {
-    const result: PollRow[] = [{ kind: 'summary' }, ...active.map(poll => ({ kind: 'poll' as const, poll }))];
+    const result: PollRow[] = [{ kind: 'summary' }, ...visibleActive.map(poll => ({ kind: 'poll' as const, poll }))];
     const groups = new Map<string, ChannelPoll[]>();
-    for (const poll of closed) {
+    for (const poll of visibleClosed) {
       const day = localDay(poll.created_at);
       groups.set(day, [...(groups.get(day) ?? []), poll]);
     }
@@ -115,7 +128,7 @@ export function ChannelPollsPanel({ channelId, refreshKey = 0, hiddenPollId = nu
       if (expanded) result.push(...polls.map(poll => ({ kind: 'poll' as const, poll })));
     }
     return result;
-  }, [active, closed, expandedDays]);
+  }, [visibleActive, visibleClosed, expandedDays]);
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -126,8 +139,8 @@ export function ChannelPollsPanel({ channelId, refreshKey = 0, hiddenPollId = nu
 
   const virtualItems = virtualizer.getVirtualItems();
 
-  if (state === 'loading' && !active.length && !closed.length) return <div className="polls-panel-state">正在加载投票…</div>;
-  if (state === 'error' && !active.length && !closed.length) return <div className="polls-panel-state"><span>{error || '暂时无法读取投票'}</span><button type="button" onClick={() => void loadFirstPage()}>重试</button></div>;
+  if (state === 'loading' && !visibleActive.length && !visibleClosed.length) return <div className="polls-panel-state">正在加载投票…</div>;
+  if (state === 'error' && !visibleActive.length && !visibleClosed.length) return <div className="polls-panel-state"><span>{error || '暂时无法读取投票'}</span><button type="button" onClick={() => void loadFirstPage()}>重试</button></div>;
 
   return <div className="polls-panel-content">
     <div className="polls-virtual-scroll" ref={scrollRef}>
@@ -136,7 +149,7 @@ export function ChannelPollsPanel({ channelId, refreshKey = 0, hiddenPollId = nu
           const row = rows[item.index];
           if (!row) return null;
           return <div key={item.key} data-index={item.index} ref={virtualizer.measureElement} className={`poll-virtual-row${row.kind === 'summary' ? ' poll-summary-row' : ''}`} style={{ transform: `translateY(${item.start}px)` }}>
-            {row.kind === 'summary' ? <div className="polls-summary">{active.length} 个进行中{closed.length ? ` · ${closed.length} 个已结束` : ''}</div> : row.kind === 'day' ? <button className="poll-day-toggle" type="button" aria-expanded={row.expanded} onClick={() => setExpandedDays(current => {
+            {row.kind === 'summary' ? <div className="polls-summary">{visibleActive.length} 个进行中{visibleClosed.length ? ` · ${visibleClosed.length} 个已结束` : ''}</div> : row.kind === 'day' ? <button className="poll-day-toggle" type="button" aria-expanded={row.expanded} onClick={() => setExpandedDays(current => {
               const next = new Set(current);
               if (next.has(row.key)) next.delete(row.key); else next.add(row.key);
               return next;
@@ -147,7 +160,7 @@ export function ChannelPollsPanel({ channelId, refreshKey = 0, hiddenPollId = nu
       {loadingMore && <div className="polls-panel-state">正在加载更早的投票…</div>}
       {hasMore && !loadingMore && <div className="polls-load-more"><button type="button" onClick={() => void loadMore()}>加载更早的投票</button></div>}
       {error && state === 'ready' && <div className="polls-panel-state"><span>{error}</span><button type="button" onClick={() => void loadMore()}>重试</button></div>}
-      {state === 'ready' && active.length === 0 && closed.length === 0 && <div className="polls-panel-state">这个频道还没有投票</div>}
+      {state === 'ready' && visibleActive.length === 0 && visibleClosed.length === 0 && <div className="polls-panel-state">这个频道还没有投票</div>}
     </div>
   </div>;
 }

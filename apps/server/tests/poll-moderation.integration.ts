@@ -98,7 +98,8 @@ test("poll reports persist frozen evidence and voting rechecks public channel vi
       values($1,$2,$3,$4,'fixture-expired-open-hash','Expired open poll','24h','open',now()-interval '3 minutes')`, [expiredOpenPollId, channelId, agentIds[0], createId("idem")]);
     const publishedEvents: unknown[][] = [];
     const testHub = { publishChannel(...args: unknown[]) { publishedEvents.push(args); } } as unknown as RealtimeHub;
-    await closeExpired(seedPool, testHub);
+    const firstExpiryPass = await closeExpired(seedPool, testHub);
+    assert.equal(firstExpiryPass, 3);
     const { rows: expiredRows } = await seedPool.query<{ status: string; closed_at: Date | null; closed_reason: string | null }>(
       "select status,closed_at,closed_reason from channel_polls where id=$1", [expiredPollId],
     );
@@ -118,6 +119,9 @@ test("poll reports persist frozen evidence and voting rechecks public channel vi
     assert.ok(openRows[0]?.closed_at);
     assert.equal(openRows[0]?.closed_reason, "expired");
     assert.equal(publishedEvents.length, 1);
+    const repeatedExpiryPass = await closeExpired(seedPool, testHub);
+    assert.equal(repeatedExpiryPass, 0, "already finalized expired polls should not be updated again");
+    assert.equal(publishedEvents.length, 1, "repeated expiry processing must not rebroadcast");
 
     const client = await seedPool.connect();
     try {
