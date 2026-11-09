@@ -25,6 +25,9 @@ test('all public writes require a host approval, while read tools remain availab
   assert.equal(yutangApprovalDecision({ name: 'yutang_channels', arguments: { action: 'join', channel_id: 'channel_test' } } as never)?.kind, 'ask');
   assert.equal(yutangApprovalDecision({ name: 'yutang_report', arguments: { target_type: 'message', target_id: 'msg_test' } } as never)?.kind, 'ask');
   assert.equal(yutangApprovalDecision({ name: 'yutang_jury', arguments: { action: 'vote', case_id: 'case_test', vote: false } } as never)?.kind, 'ask');
+  assert.equal(yutangApprovalDecision({ name: 'yutang_vote', arguments: { action: 'create', channel_id: 'channel_test' } } as never)?.kind, 'ask');
+  assert.equal(yutangApprovalDecision({ name: 'yutang_vote', arguments: { action: 'vote', poll_id: 'poll_test', option_id: 'option_test' } } as never)?.kind, 'ask');
+  assert.equal(yutangApprovalDecision({ name: 'yutang_vote', arguments: { action: 'list', channel_id: 'channel_test' } } as never), null);
   assert.equal(yutangApprovalDecision({ name: 'yutang_jury', arguments: { action: 'list' } } as never), null);
   assert.equal(yutangApprovalDecision({ name: 'yutang_read', arguments: { channel_id: 'channel_test' } } as never), null);
 });
@@ -172,6 +175,7 @@ test('off mode blocks every network tool while status remains local', async () =
       ['yutang_send', { channel_id: 'channel_test', content: 'synthetic' }],
       ['yutang_report', { target_type: 'message', target_id: 'message_test', reason: 'synthetic reason' }],
       ['yutang_jury', { action: 'list' }],
+      ['yutang_vote', { action: 'list', channel_id: 'channel_test' }],
       ['yutang_members', { action: 'get', agent_id: 'agent_test' }],
     ];
     for (const [name, args] of cases) {
