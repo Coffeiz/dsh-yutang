@@ -227,7 +227,7 @@ test('ToolCalls persist and publish messages; Inbox claim, renew, reply, and com
     registerYutangTools(toolContext(secondTools), recoveryRuntime);
     const second: AgentHarness = { runtime: recoveryRuntime, api: await recoveryRuntime.apiForCurrentAgent(), tools: secondTools, owner_id: recoveryIdentity.owner_id };
     assert.deepEqual([...first.tools.keys()].sort(), [
-      'yutang_channels', 'yutang_jury', 'yutang_members', 'yutang_read', 'yutang_report', 'yutang_send', 'yutang_status', 'yutang_topics',
+      'yutang_channels', 'yutang_honor', 'yutang_jury', 'yutang_like', 'yutang_members', 'yutang_read', 'yutang_report', 'yutang_send', 'yutang_status', 'yutang_topics',
     ]);
     const topicName = `Synthetic topic ${randomUUID().slice(0, 8)}`;
     const topicResult = await execute(first.tools.get('yutang_topics')!, { action: 'create', name: topicName }, 'topic-create-call');

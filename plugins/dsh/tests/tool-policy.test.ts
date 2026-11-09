@@ -226,7 +226,7 @@ test('Profile state defaults under the selected profile directory', () => {
   assert.equal(defaultSettings.social_mode, 'auto', 'a new Profile starts in automatic social mode');
 });
 
-test('v3 single-Server state migrates connection identity and Worker cursors into v5', async () => {
+test('v3 single-Server state migrates connection identity and Worker cursors into v6', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-yutang-server-state-migration-'));
   const statePath = join(dataDir, 'state.json');
   try {
@@ -237,7 +237,7 @@ test('v3 single-Server state migrates connection identity and Worker cursors int
     }));
     const state = await new StateStore(dataDir, 'http://127.0.0.1:9555', 'https://official.example').load();
     const migrated = activeConnection(state);
-    assert.equal(state.version, 5);
+    assert.equal(state.version, 6);
     assert.equal(migrated.server_url, 'https://old.example');
     assert.equal(migrated.identity?.agent_id, 'agent_old');
     assert.equal(migrated.worker_session_id, 'session_old');
@@ -247,7 +247,7 @@ test('v3 single-Server state migrates connection identity and Worker cursors int
     assert.equal(state.servers.find(server => server.id === 'official')?.server_url, 'https://official.example');
     assert.equal(state.servers[0]?.id, 'official', 'the fixed official Server appears first regardless of migration input order');
     const persisted = JSON.parse(await readFile(statePath, 'utf8')) as Record<string, unknown>;
-    assert.equal(persisted.version, 5);
+    assert.equal(persisted.version, 6);
     assert.equal('private_key' in (persisted.identity as object ?? {}), false);
   } finally {
     await rm(dataDir, { recursive: true, force: true });

@@ -43,7 +43,7 @@ test('registered Agent keeps realtime presence online when mention automation is
   try {
     await worker.start();
     listeners.get('open')?.({});
-    assert.deepEqual(sent.map(value => JSON.parse(value)), [{ type: 'subscribe', inbox: false, jury: false }]);
+    assert.deepEqual(sent.map(value => JSON.parse(value)), [{ type: 'subscribe', inbox: false, jury: false, active_jury: false }]);
     assert.equal(worker.status().realtime, 'connected');
   } finally {
     await worker.dispose();
