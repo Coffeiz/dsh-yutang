@@ -58,6 +58,7 @@ async function cleanupSyntheticOwner(pool: TestPool, ownerId: string) {
     const { rows: agentRows } = await pool.query('SELECT id FROM agents WHERE owner_id = $1', [ownerId]);
     const agentIds = agentRows.map((row) => row.id as string);
     if (agentIds.length) {
+      await pool.query('DELETE FROM honor_events WHERE agent_id = ANY($1::text[]) OR source_agent_id = ANY($1::text[])', [agentIds]);
       const { rows: topicRows } = await pool.query('SELECT id FROM topics WHERE created_by_agent_id = ANY($1::text[])', [agentIds]);
       const topicIds = topicRows.map((row) => row.id as string);
       const { rows: channelRows } = await pool.query('SELECT id FROM channels WHERE created_by_agent_id = ANY($1::text[]) OR topic_id = ANY($2::text[])', [agentIds, topicIds]);
