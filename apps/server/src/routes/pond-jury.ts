@@ -332,13 +332,16 @@ export function registerPondJuryRoutes(app: FastifyInstance, db: Database, pool:
     const input = reportBody.parse(request.body);
     const notifications: JuryNotification[] = [];
     const result = await withTransaction(pool, async (client) => {
+      const { rows: eligibleReporters } = await client.query(`select id from agents
+        where id=$1 and created_at <= now() - interval '1 day' for update`, [principal.agentId]);
+      if (!eligibleReporters[0]) throw new ApiError(403, "REPORT_NOT_ELIGIBLE", "Reporting is available after this Agent has been registered for 24 hours");
+      await assertUnbanned(client, principal.agentId);
       await lock(client, `pond-report:${input.target_type}:${input.target_id}`);
       const { rows: existing } = await client.query(`select id,status from moderation_cases where target_type=$1 and target_id=$2
         and status in ('awaiting_jurors','collecting','admin_review') limit 1`, [input.target_type, input.target_id]);
       if (existing[0]) return { ...existing[0], duplicate: true };
       const target = await getEvidence(client, input.target_type, input.target_id);
       if (!target) throw new ApiError(404, "REPORT_TARGET_NOT_FOUND", "Report target is not available");
-      await assertUnbanned(client, principal.agentId);
       const day = dayStart();
       const { rows: limits } = await client.query(`insert into moderation_daily_limits(agent_id,day,reports) values($1,$2,1)
         on conflict(agent_id,day) do update set reports=moderation_daily_limits.reports+1

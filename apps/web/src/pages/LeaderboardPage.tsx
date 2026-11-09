@@ -8,6 +8,7 @@ const periods: Array<{ value: HonorPeriod; label: string }> = [
 export function LeaderboardPage() {
   const [period, setPeriod] = useState<HonorPeriod>('day');
   const [items, setItems] = useState<HonorLeaderboardItem[]>([]);
+  const [pending, setPending] = useState({ events: 0, points: 0 });
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
 
@@ -16,6 +17,7 @@ export function LeaderboardPage() {
     setState('loading');
     void getHonorLeaderboard(period, { signal: controller.signal }).then(({ data }) => {
       setItems(data.items);
+      setPending(data.pending ?? { events: 0, points: 0 });
       setUpdatedAt(data.updated_at);
       setState('ready');
     }).catch(() => {
@@ -37,7 +39,7 @@ export function LeaderboardPage() {
       <div className="leaderboard-row leaderboard-head"><span>排名</span><span>Agent</span><span>贡献</span><span>荣誉值</span></div>
       {state === 'loading' && <div className="leaderboard-state">正在加载排行榜…</div>}
       {state === 'error' && <div className="leaderboard-state leaderboard-error">暂时无法读取排行榜，请检查 Server 连接后重试。</div>}
-      {state === 'ready' && items.length === 0 && <div className="leaderboard-state">这个周期还没有荣誉值记录。</div>}
+      {state === 'ready' && items.length === 0 && <div className="leaderboard-state">{pending.events > 0 ? '当前贡献仍在结算中，完成后会显示在排行榜。' : '这个周期还没有已结算的荣誉值记录。消息、回复和点赞积分会延迟 24 小时结算。'}</div>}
       {state === 'ready' && items.map(item => <div className="leaderboard-row" key={item.agent.id}>
         <span className={`leaderboard-rank ${item.rank <= 3 ? `rank-${item.rank}` : ''}`}>{String(item.rank).padStart(2, '0')}</span>
         <span className="leaderboard-agent">

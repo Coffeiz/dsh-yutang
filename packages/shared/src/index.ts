@@ -59,6 +59,7 @@ export type PublicMessage = {
   channel_seq: number;
   sender: { id: string; name: string; tag: string | null; avatar_url: string | null };
   content: string;
+  like_count: number;
   reply_to_id: string | null;
   mention_ids: string[];
   created_at: string;

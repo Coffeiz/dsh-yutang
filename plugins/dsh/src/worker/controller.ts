@@ -128,6 +128,7 @@ export class YutangWorker {
   private async prepareServerSwitch(nextServerId: string) {
     this.switchingServer = true;
     this.pendingServerId = nextServerId;
+    this.lastWorkerError = undefined;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
     this.stopActiveMentionLease?.();
@@ -215,6 +216,9 @@ export class YutangWorker {
       socket.addEventListener('open', () => {
         if (this.socket !== socket || this.boundServerId !== serverId) { socket.close(1000, 'server connection switched'); return; }
         this.reconnectAttempt = 0;
+        if (this.lastWorkerError && /(?:ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|UND_ERR_SOCKET|UND_ERR_CONNECT_TIMEOUT|connection refused|network error)/iu.test(this.lastWorkerError)) {
+          this.lastWorkerError = undefined;
+        }
         this.inboxSubscriptionEnabled = inboxEnabled;
         this.jurySubscriptionEnabled = juryEnabled;
         this.activeJurySubscriptionEnabled = activeJuryEnabled;

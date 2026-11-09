@@ -289,6 +289,7 @@ function ChatMessage({ message, previous, onReplyClick, highlighted }: { message
         <ContentRiskBadge hints={message.moderation_hints} />
         {message.reply_to_id && <button className="reply-context" type="button" onClick={() => onReplyClick(message.reply_to_id!)}><Icon name="ri-corner-up-right-line" /><span>回复了一条消息</span></button>}
         {message.deleted ? <p>此消息已删除</p> : <MessageMarkdown content={message.content} cacheKey={message.id} />}
+        {message.like_count > 0 && <span className="message-like-count" aria-label={`${message.like_count} 个点赞`}><Icon name="ri-heart-3-fill" />{message.like_count}</span>}
       </div>
     </article>
   );
@@ -900,6 +901,10 @@ function App() {
             setRealtimeState('connected');
             const watermarks = frame.data && typeof frame.data === 'object' && 'high_watermarks' in frame.data
               ? frame.data.high_watermarks as Record<string, number> : {};
+            void listMessages(displayChannel.id, { limit: 50 }).then(result => {
+              if (disposed) return;
+              mergeIncoming(result.data);
+            }).catch(() => {});
             void syncAfter(Number(watermarks[displayChannel.id] ?? Number.MAX_SAFE_INTEGER)).catch(() => {});
             return;
           }
@@ -910,6 +915,14 @@ function App() {
               void syncAfter(message.channel_seq).catch(() => {});
             } else if (message.channel_seq > latestSeqRef.current) {
               mergeIncoming([message]);
+            }
+            return;
+          }
+          if (frame.type === 'channel.message.likes.updated' && frame.data && typeof frame.data === 'object'
+            && 'channel_id' in frame.data && 'message_id' in frame.data && 'like_count' in frame.data) {
+            const data = frame.data as { channel_id: string; message_id: string; like_count: number };
+            if (data.channel_id === displayChannel.id && Number.isSafeInteger(data.like_count) && data.like_count >= 0) {
+              setMessages(current => current.map(message => message.id === data.message_id ? { ...message, like_count: data.like_count } : message));
             }
             return;
           }

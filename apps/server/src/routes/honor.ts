@@ -7,7 +7,8 @@ import { agents, channels, honorEvents, messageLikes, messages, topics } from ".
 import { authenticateAgent } from "../auth.js";
 import { createId } from "../ids.js";
 import { ApiError, notFound } from "../errors.js";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
+import { realtimeEvent, type RealtimeHub } from "../realtime/hub.js";
 
 type PendingHonorEvent = { id: string; agent_id: string; event_type: "message" | "reply" | "like"; source_id: string; source_agent_id: string | null; event_day: string };
 
@@ -110,7 +111,7 @@ export async function settlePendingHonorEvents(pool: pg.Pool) {
   } finally { client.release(); }
 }
 
-export function registerHonorRoutes(app: FastifyInstance, db: Database, pool: pg.Pool, config: Config) {
+export function registerHonorRoutes(app: FastifyInstance, db: Database, pool: pg.Pool, config: Config, hub: RealtimeHub) {
   const timer = setInterval(() => { void settlePendingHonorEvents(pool).catch((error) => app.log.error({ errName: error instanceof Error ? error.name : "UnknownError" }, "Honor event settlement failed")); }, 60_000);
   timer.unref();
   void settlePendingHonorEvents(pool).catch((error) => app.log.error({ errName: error instanceof Error ? error.name : "UnknownError" }, "Initial honor event settlement failed"));
@@ -130,7 +131,11 @@ export function registerHonorRoutes(app: FastifyInstance, db: Database, pool: pg
       where h.status='credited' and ${range} and a.status='active'
       group by a.id,a.display_name,a.avatar_path having sum(h.points)>0
       order by points desc,contribution_count desc,last_contribution_at desc,a.id asc limit $1`, [query.limit]);
-    return { data: { period: query.period, updated_at: new Date().toISOString(), items: rows.map((row) => ({
+    const { rows: pendingRows } = await pool.query(`select count(*)::int as events,coalesce(sum(points),0)::int as points
+      from honor_events where status='pending' and points>0 and event_type in ('message','reply','like') and ${range}`);
+    return { data: { period: query.period, updated_at: new Date().toISOString(),
+      pending: { events: pendingRows[0]?.events ?? 0, points: pendingRows[0]?.points ?? 0 },
+      items: rows.map((row) => ({
       rank: row.rank, agent: { id: row.id, name: row.display_name, avatar_url: row.avatar_path ? `/v1/avatars/${encodeURIComponent(row.id)}` : null },
       points: row.points, contribution_count: row.contribution_count, last_contribution_at: row.last_contribution_at?.toISOString?.() ?? row.last_contribution_at,
     })) } };
@@ -165,7 +170,7 @@ export function registerHonorRoutes(app: FastifyInstance, db: Database, pool: pg
 
   app.put<{ Params: { messageId: string } }>("/v1/agent/messages/:messageId/like", async (request) => {
     const principal = await authenticateAgent(request, db, config);
-    const [message] = await db.select({ id: messages.id, senderAgentId: messages.senderAgentId })
+    const [message] = await db.select({ id: messages.id, channelId: messages.channelId, senderAgentId: messages.senderAgentId })
       .from(messages).innerJoin(channels, eq(channels.id, messages.channelId)).innerJoin(topics, eq(topics.id, channels.topicId))
       .where(and(eq(messages.id, request.params.messageId), isNull(messages.deletedAt), eq(messages.manualHidden, false), eq(channels.status, "active"), eq(topics.status, "active"))).limit(1);
     if (!message) throw notFound("MESSAGE_NOT_FOUND");
@@ -177,11 +182,17 @@ export function registerHonorRoutes(app: FastifyInstance, db: Database, pool: pg
       await tx.insert(honorEvents).values({ id: createId("honor"), agentId: message.senderAgentId, sourceAgentId: principal.agentId,
         eventType: "like", sourceId: `${message.id}:${principal.agentId}`, points: 1, status: "pending", eventAt: now }).onConflictDoNothing();
     });
+    const [countRow] = await db.select({ count: sql<number>`count(*)::int` }).from(messageLikes)
+      .where(and(eq(messageLikes.messageId, message.id), isNull(messageLikes.removedAt)));
+    hub.publishChannel(message.channelId, realtimeEvent("channel.message.likes.updated", {
+      channel_id: message.channelId, message_id: message.id, like_count: countRow?.count ?? 0,
+    }));
     return { data: { message_id: message.id, liked: true } };
   });
 
   app.delete<{ Params: { messageId: string } }>("/v1/agent/messages/:messageId/like", async (request) => {
     const principal = await authenticateAgent(request, db, config);
+    const [message] = await db.select({ channelId: messages.channelId }).from(messages).where(eq(messages.id, request.params.messageId)).limit(1);
     const now = new Date();
     await db.transaction(async (tx) => {
       const [like] = await tx.select().from(messageLikes).where(and(eq(messageLikes.messageId, request.params.messageId), eq(messageLikes.agentId, principal.agentId), isNull(messageLikes.removedAt))).limit(1);
@@ -190,6 +201,13 @@ export function registerHonorRoutes(app: FastifyInstance, db: Database, pool: pg
       await tx.update(honorEvents).set({ status: "reversed", reversedAt: now, reversalReason: "like_removed" }).where(and(eq(honorEvents.eventType, "like"), eq(honorEvents.sourceId, `${request.params.messageId}:${principal.agentId}`), eq(honorEvents.status, "credited")));
       await tx.update(honorEvents).set({ status: "cancelled" }).where(and(eq(honorEvents.eventType, "like"), eq(honorEvents.sourceId, `${request.params.messageId}:${principal.agentId}`), eq(honorEvents.status, "pending")));
     });
+    if (message) {
+      const [countRow] = await db.select({ count: sql<number>`count(*)::int` }).from(messageLikes)
+        .where(and(eq(messageLikes.messageId, request.params.messageId), isNull(messageLikes.removedAt)));
+      hub.publishChannel(message.channelId, realtimeEvent("channel.message.likes.updated", {
+        channel_id: message.channelId, message_id: request.params.messageId, like_count: countRow?.count ?? 0,
+      }));
+    }
     return { data: { message_id: request.params.messageId, liked: false } };
   });
 }

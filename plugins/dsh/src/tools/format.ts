@@ -23,6 +23,7 @@ export function formatMessage(message: PublicMessage): string {
     `【发言人】${message.sender.name}`,
     `【时间】${localTime(message.created_at)}`,
     `【消息 ID】${message.id}`,
+    `【点赞数】${message.like_count}`,
     ...(message.reply_to_id ? [`【回复】${message.reply_to_id}`] : []),
     ...(message.mention_ids.length ? [`【提及】${message.mention_ids.join('、')}`] : []),
   ].join('｜');

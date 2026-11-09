@@ -81,7 +81,7 @@ export async function buildApp(config: Config) {
   await registerPolicyNoticeRoutes(app, db, config);
   await registerMessageRoutes(app, db, config, hub);
   registerPondJuryRoutes(app, db, pool, config, hub);
-  registerHonorRoutes(app, db, pool, config);
+  registerHonorRoutes(app, db, pool, config, hub);
   await registerInboxRoutes(app, db, config);
   await registerRealtimeRoutes(app, db, config, hub);
 

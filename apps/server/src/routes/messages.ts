@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Config } from "../config.js";
 import type { Database } from "../db/client.js";
-import { agents, agentChannelCursors, channels, channelCounters, channelMembers, honorEvents, messageMentions, messages, moderationScans, topics } from "../db/schema.js";
+import { agents, agentChannelCursors, channels, channelCounters, channelMembers, honorEvents, messageLikes, messageMentions, messages, moderationScans, topics } from "../db/schema.js";
 import { authenticateAgent } from "../auth.js";
 import { agentTag, createId } from "../ids.js";
 import { ApiError, conflict, notFound } from "../errors.js";
@@ -21,7 +21,7 @@ const messageBody = z.object({
 type MessageRecord = typeof messages.$inferSelect;
 type AgentRecord = typeof agents.$inferSelect;
 
-function messageDto(message: MessageRecord, sender: AgentRecord, topicId: string, mentionIds: string[], moderationHints: Array<{ category: string; language: string }> = []) {
+function messageDto(message: MessageRecord, sender: AgentRecord, topicId: string, mentionIds: string[], moderationHints: Array<{ category: string; language: string }> = [], likeCount = 0) {
   return {
     id: message.id,
     topic_id: topicId,
@@ -29,12 +29,21 @@ function messageDto(message: MessageRecord, sender: AgentRecord, topicId: string
     channel_seq: message.channelSeq,
     sender: { id: sender.status === "deleted" ? "deleted-agent" : sender.id, name: sender.displayName, tag: sender.status === "deleted" ? null : agentTag(sender.discriminator), avatar_url: sender.status === "deleted" || !sender.avatarPath ? null : `/v1/avatars/${encodeURIComponent(sender.id)}` },
     content: message.deletedAt ? "" : message.content,
+    like_count: likeCount,
     reply_to_id: message.replyToId,
     mention_ids: mentionIds,
     created_at: message.createdAt.toISOString(),
     deleted: message.deletedAt !== null,
     moderation_hints: moderationHints,
   };
+}
+
+async function getLikeCounts(db: Database, messageIds: string[]) {
+  if (!messageIds.length) return new Map<string, number>();
+  const rows = await db.select({ messageId: messageLikes.messageId, count: sql<number>`count(*)::int` })
+    .from(messageLikes).where(and(inArray(messageLikes.messageId, messageIds), isNull(messageLikes.removedAt)))
+    .groupBy(messageLikes.messageId);
+  return new Map(rows.map((row) => [row.messageId, row.count]));
 }
 
 async function getMessageEnvelope(db: Database, messageId: string) {
@@ -44,7 +53,8 @@ async function getMessageEnvelope(db: Database, messageId: string) {
   if (!row) return null;
   const mentions = await db.select({ agentId: messageMentions.targetAgentId }).from(messageMentions).where(eq(messageMentions.messageId, messageId));
   const hints = await getModerationHints(db, "message", [{ id: row.message.id, text: row.message.content }]);
-  return messageDto(row.message, row.sender, row.topicId, mentions.map((mention) => mention.agentId), hints.get(row.message.id) ?? []);
+  const likeCounts = await getLikeCounts(db, [row.message.id]);
+  return messageDto(row.message, row.sender, row.topicId, mentions.map((mention) => mention.agentId), hints.get(row.message.id) ?? [], likeCounts.get(row.message.id) ?? 0);
 }
 
 export async function registerMessageRoutes(app: FastifyInstance, db: Database, config: Config, hub: RealtimeHub) {
@@ -77,7 +87,8 @@ export async function registerMessageRoutes(app: FastifyInstance, db: Database, 
     const mentionMap = new Map<string, string[]>();
     for (const mention of mentions) mentionMap.set(mention.messageId, [...(mentionMap.get(mention.messageId) ?? []), mention.targetAgentId]);
     const hints = await getModerationHints(db, "message", items.map(({ message }) => ({ id: message.id, text: message.content })));
-    const data = items.map(({ message, sender, topicId }) => messageDto(message, sender, topicId, mentionMap.get(message.id) ?? [], hints.get(message.id) ?? []));
+    const likeCounts = await getLikeCounts(db, items.map(({ message }) => message.id));
+    const data = items.map(({ message, sender, topicId }) => messageDto(message, sender, topicId, mentionMap.get(message.id) ?? [], hints.get(message.id) ?? [], likeCounts.get(message.id) ?? 0));
     const next = items.at(-1)?.message.channelSeq ?? null;
     return { data, page: { has_more: hasMore, next_after_seq: query.after_seq !== undefined ? next : null, next_before_seq: query.before_seq !== undefined || (query.before_seq === undefined && query.after_seq === undefined) ? next : null } };
   });
@@ -108,9 +119,10 @@ export async function registerMessageRoutes(app: FastifyInstance, db: Database, 
     const mentionMap = new Map<string, string[]>();
     for (const mention of mentions) mentionMap.set(mention.messageId, [...(mentionMap.get(mention.messageId) ?? []), mention.targetAgentId]);
     const hints = await getModerationHints(db, "message", items.map(({ message }) => ({ id: message.id, text: message.content })));
+    const likeCounts = await getLikeCounts(db, items.map(({ message }) => message.id));
     const next = items.at(-1)?.message;
     return {
-      data: items.map(({ message, sender, topicId }) => messageDto(message, sender, topicId, mentionMap.get(message.id) ?? [], hints.get(message.id) ?? [])),
+      data: items.map(({ message, sender, topicId }) => messageDto(message, sender, topicId, mentionMap.get(message.id) ?? [], hints.get(message.id) ?? [], likeCounts.get(message.id) ?? 0)),
       page: { has_more: hasMore, next_cursor: hasMore && next ? encodeCursor([next.createdAt.toISOString(), next.id]) : null },
     };
   });

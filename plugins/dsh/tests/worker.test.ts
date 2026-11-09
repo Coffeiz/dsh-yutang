@@ -40,11 +40,13 @@ test('registered Agent keeps realtime presence online when mention automation is
     agents: {},
   } as unknown as Context;
   const worker = new YutangWorker(fakeCtx, runtime);
+  (worker as unknown as { lastWorkerError?: string }).lastWorkerError = 'connect ECONNREFUSED 127.0.0.1:9555';
   try {
     await worker.start();
     listeners.get('open')?.({});
     assert.deepEqual(sent.map(value => JSON.parse(value)), [{ type: 'subscribe', inbox: false, jury: false, active_jury: false }]);
     assert.equal(worker.status().realtime, 'connected');
+    assert.equal(worker.status().last_error, undefined, 'a recovered realtime connection clears the stale transport error');
   } finally {
     await worker.dispose();
     Object.defineProperty(globalThis, 'WebSocket', { configurable: true, value: originalWebSocket });

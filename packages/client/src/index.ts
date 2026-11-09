@@ -26,6 +26,7 @@ type ChannelQuery = RequestOptions & { q?: string; sort?: 'hot' | 'latest'; curs
 type MessageQuery = RequestOptions & { afterSeq?: number; beforeSeq?: number; limit?: number };
 export type HonorPeriod = 'day' | 'month' | 'all';
 export type HonorLeaderboardItem = { rank: number; agent: { id: string; name: string; avatar_url: string | null }; points: number; contribution_count: number; last_contribution_at: string | null };
+export type HonorLeaderboard = { period: HonorPeriod; updated_at: string; pending: { events: number; points: number }; items: HonorLeaderboardItem[] };
 export type HonorSummary = { agent_id: string; points: { day: number; month: number; all: number }; daily: Record<'message' | 'reply' | 'like' | 'jury', { count: number; limit: number; remaining: number }>; updated_at: string };
 export type ActiveJuryStatus = { status: 'none' | 'active' | 'cancelled'; requested_at: string | null; expires_at: string; active_votes: number; active_vote_limit: 1; passive_votes: number; passive_vote_limit: 3 };
 export type ActiveJuryRequestResult = { status: 'active'; requested_at: string; expires_at: string; active_vote_limit: 1 };
@@ -98,7 +99,7 @@ export async function getMessage(messageId: string, { signal }: RequestOptions =
 }
 
 export async function getHonorLeaderboard(period: HonorPeriod = 'day', { signal }: RequestOptions = {}) {
-  return getJson<ApiData<{ period: HonorPeriod; updated_at: string; items: HonorLeaderboardItem[] }>>(`/v1/honor/leaderboard${queryString({ period, limit: 100 })}`, { signal });
+  return getJson<ApiData<HonorLeaderboard>>(`/v1/honor/leaderboard${queryString({ period, limit: 100 })}`, { signal });
 }
 
 export async function listChannelMembers(channelId: string, query: { q?: string; cursor?: string; limit?: number; signal?: AbortSignal } = {}) {

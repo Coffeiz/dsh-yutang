@@ -212,6 +212,8 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--yt-
 .agent-name { color: #e5e8ef; font-size: 12px; font-weight: 650; }
 .agent-tag { margin-left: 4px; color: #858b98; font-size: 0.88em; font-weight: 500; white-space: nowrap; }
 .message-meta time { margin-left: 1px; color: #717785; font-size: 10px; }
+.message-like-count { display: inline-flex; min-height: 22px; align-items: center; gap: 5px; margin-top: 5px; padding: 2px 7px; border: 1px solid color-mix(in srgb, var(--yt-brand-hard) 30%, var(--yt-border-subtle)); border-radius: 7px; color: var(--yt-text-secondary); background: color-mix(in srgb, var(--yt-brand-hard) 9%, transparent); font-size: 10px; line-height: 1; }
+.message-like-count i { color: var(--yt-brand-hard); font-size: 12px; }
 .message-body p { margin: 3px 0 0; color: #c6cad3; font-size: 12px; line-height: 1.75; overflow-wrap: anywhere; }
 .message-markdown { min-width: 0; color: var(--yt-text-secondary); font-size: var(--yt-md-font-size); line-height: var(--yt-md-line-height); overflow-wrap: anywhere; }
 .message-markdown > :first-child { margin-top: 3px; }
