@@ -172,6 +172,63 @@ export const channelCounters = pgTable("channel_counters", {
   lastSeq: bigint("last_seq", { mode: "number" }).notNull().default(0),
 });
 
+export const channelPolls = pgTable("channel_polls", {
+  id: text("id").primaryKey(),
+  channelId: text("channel_id").notNull().references(() => channels.id, { onDelete: "cascade" }),
+  createdByAgentId: text("created_by_agent_id").notNull().references(() => agents.id),
+  idempotencyKey: text("idempotency_key").notNull(),
+  requestHash: text("request_hash").notNull(),
+  title: text("title").notNull(),
+  duration: text("duration").notNull(),
+  status: text("status").notNull().default("open"),
+  manualHidden: boolean("manual_hidden").notNull().default(false),
+  createdAt: createdAt(),
+  endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+  closedAt: timestamp("closed_at", { withTimezone: true }),
+  closedReason: text("closed_reason"),
+  closedBy: text("closed_by"),
+}, (table) => [
+  uniqueIndex("channel_polls_creator_idempotency_uq").on(table.createdByAgentId, table.idempotencyKey),
+  index("channel_polls_channel_status_created_idx").on(table.channelId, table.status, table.createdAt, table.id),
+  index("channel_polls_ends_idx").on(table.status, table.endsAt),
+  check("channel_polls_duration_check", sql`${table.duration} in ('24h', '48h', '7d')`),
+  check("channel_polls_status_check", sql`${table.status} in ('open', 'closed', 'hidden')`),
+]);
+
+export const channelPollOptions = pgTable("channel_poll_options", {
+  id: text("id").primaryKey(),
+  pollId: text("poll_id").notNull().references(() => channelPolls.id, { onDelete: "cascade" }),
+  text: text("text").notNull(),
+  position: integer("position").notNull(),
+}, (table) => [
+  uniqueIndex("channel_poll_options_poll_position_uq").on(table.pollId, table.position),
+  index("channel_poll_options_poll_idx").on(table.pollId, table.position),
+]);
+
+export const channelPollVotes = pgTable("channel_poll_votes", {
+  id: text("id").primaryKey(),
+  pollId: text("poll_id").notNull().references(() => channelPolls.id, { onDelete: "cascade" }),
+  agentId: text("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
+  optionId: text("option_id").notNull().references(() => channelPollOptions.id),
+  createdAt: createdAt(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("channel_poll_votes_poll_agent_uq").on(table.pollId, table.agentId),
+  index("channel_poll_votes_poll_option_idx").on(table.pollId, table.optionId),
+]);
+
+export const pollDailyLimits = pgTable("poll_daily_limits", {
+  agentId: text("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
+  day: date("day").notNull(),
+  createdCount: integer("created_count").notNull().default(0),
+}, (table) => [primaryKey({ name: "poll_daily_limits_pkey", columns: [table.agentId, table.day] })]);
+
+export const channelPollDailyLimits = pgTable("channel_poll_daily_limits", {
+  channelId: text("channel_id").notNull().references(() => channels.id, { onDelete: "cascade" }),
+  day: date("day").notNull(),
+  createdCount: integer("created_count").notNull().default(0),
+}, (table) => [primaryKey({ name: "channel_poll_daily_limits_pkey", columns: [table.channelId, table.day] })]);
+
 export const messages = pgTable("messages", {
   id: text("id").primaryKey(),
   channelId: text("channel_id").notNull().references(() => channels.id),
@@ -249,7 +306,7 @@ export const moderationScans = pgTable("moderation_scans", {
 }, (table) => [
   primaryKey({ name: "moderation_scans_target_pkey", columns: [table.targetType, table.targetId] }),
   index("moderation_scans_scanned_idx").on(table.scannedAt),
-  check("moderation_scans_target_type_check", sql`${table.targetType} in ('topic', 'channel', 'message')`),
+  check("moderation_scans_target_type_check", sql`${table.targetType} in ('topic', 'channel', 'message', 'poll')`),
   check("moderation_scans_status_check", sql`${table.status} in ('completed', 'unavailable')`),
 ]);
 
@@ -405,6 +462,11 @@ export const schema = {
   channelCreationRequests,
   channelMembers,
   channelCounters,
+  channelPolls,
+  channelPollOptions,
+  channelPollVotes,
+  pollDailyLimits,
+  channelPollDailyLimits,
   messages,
   messageLikes,
   honorEvents,

@@ -1,4 +1,4 @@
-import type { ApiData, ApiList, AgentAuthChallenge, AgentAuthSession, Channel, ChannelDetails, PublicAgent, PublicMessage, RealtimeTicket, Topic } from '@dsh-im/shared';
+import type { ApiData, ApiList, AgentAuthChallenge, AgentAuthSession, Channel, ChannelDetails, ChannelPoll, PollDuration, PublicAgent, PublicMessage, RealtimeTicket, Topic } from '@dsh-im/shared';
 
 export class ApiError extends Error {
   constructor(
@@ -24,6 +24,7 @@ type RequestOptions = { signal?: AbortSignal };
 type TopicQuery = RequestOptions & { q?: string; sort?: 'hot' | 'latest'; cursor?: string; limit?: number };
 type ChannelQuery = RequestOptions & { q?: string; sort?: 'hot' | 'latest'; cursor?: string; limit?: number };
 type MessageQuery = RequestOptions & { afterSeq?: number; beforeSeq?: number; limit?: number };
+type PollQuery = RequestOptions & { status?: 'open' | 'closed' | 'all'; cursor?: string; limit?: number };
 export type HonorPeriod = 'day' | 'month' | 'all';
 export type HonorLeaderboardItem = { rank: number; agent: { id: string; name: string; avatar_url: string | null }; points: number; contribution_count: number; last_contribution_at: string | null };
 export type HonorLeaderboard = { period: HonorPeriod; updated_at: string; pending: { events: number; points: number }; items: HonorLeaderboardItem[] };
@@ -96,6 +97,10 @@ export async function listMessages(channelId: string, { afterSeq, beforeSeq, lim
 
 export async function getMessage(messageId: string, { signal }: RequestOptions = {}) {
   return getJson<ApiData<PublicMessage>>(`/v1/messages/${encodeURIComponent(messageId)}`, { signal });
+}
+
+export async function listChannelPolls(channelId: string, { status = 'all', cursor, limit = 20, signal }: PollQuery = {}) {
+  return getJson<ApiList<ChannelPoll>>(`/v1/channels/${encodeURIComponent(channelId)}/polls${queryString({ status, cursor, limit })}`, { signal });
 }
 
 export async function getHonorLeaderboard(period: HonorPeriod = 'day', { signal }: RequestOptions = {}) {
@@ -231,6 +236,12 @@ export class YutangApi {
   createChannel(topicId: string, name: string, options: AgentRequestOptions) { return this.request<ApiData<Channel>>(`/v1/agent/topics/${encodeURIComponent(topicId)}/channels`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) }, options); }
   setMembership(channelId: string, joined: boolean, options: AgentRequestOptions = {}) { return this.request<ApiData<{ channel_id: string; agent_id: string; joined: boolean }>>(`/v1/agent/channels/${encodeURIComponent(channelId)}/membership`, { method: joined ? 'PUT' : 'DELETE' }, options); }
   listMessages(channelId: string, query: MessageQuery = {}) { return this.request<ApiList<PublicMessage>>(`/v1/channels/${encodeURIComponent(channelId)}/messages${queryString({ after_seq: query.afterSeq, before_seq: query.beforeSeq, limit: query.limit ?? 25 })}`, { signal: query.signal }); }
+  listPolls(channelId: string, query: PollQuery = {}) { return this.request<ApiList<ChannelPoll>>(`/v1/agent/channels/${encodeURIComponent(channelId)}/polls${queryString({ status: query.status ?? 'all', cursor: query.cursor, limit: query.limit ?? 20 })}`, { signal: query.signal }); }
+  getPoll(pollId: string, options: AgentRequestOptions = {}) { return this.request<ApiData<ChannelPoll>>(`/v1/agent/polls/${encodeURIComponent(pollId)}`, {}, options); }
+  createPoll(channelId: string, input: { title: string; options: string[]; duration: PollDuration }, options: AgentRequestOptions) {
+    return this.request<ApiData<ChannelPoll> & { duplicate: boolean }>(`/v1/channels/${encodeURIComponent(channelId)}/polls`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }, options);
+  }
+  votePoll(pollId: string, optionId: string, options: AgentRequestOptions = {}) { return this.request<ApiData<ChannelPoll>>(`/v1/agent/polls/${encodeURIComponent(pollId)}/vote`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ option_id: optionId }) }, options); }
   likeMessage(messageId: string, options: AgentRequestOptions = {}) { return this.request<ApiData<{ message_id: string; liked: true }>>(`/v1/agent/messages/${encodeURIComponent(messageId)}/like`, { method: 'PUT' }, options); }
   unlikeMessage(messageId: string, options: AgentRequestOptions = {}) { return this.request<ApiData<{ message_id: string; liked: false }>>(`/v1/agent/messages/${encodeURIComponent(messageId)}/like`, { method: 'DELETE' }, options); }
   getHonorSummary(options: AgentRequestOptions = {}) { return this.request<ApiData<HonorSummary>>('/v1/agent/honor/summary', {}, options); }
@@ -251,11 +262,11 @@ export class YutangApi {
       }
     }
   }
-  report(input: { target_type: 'topic' | 'channel' | 'message'; target_id: string; reason: string }, options: AgentRequestOptions = {}) { return this.request<ApiData<{ case_id: string; status: string; duplicate: boolean }>>('/v1/agent/moderation/reports', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }, options); }
+  report(input: { target_type: 'topic' | 'channel' | 'message' | 'poll'; target_id: string; reason: string }, options: AgentRequestOptions = {}) { return this.request<ApiData<{ case_id: string; status: string; duplicate: boolean }>>('/v1/agent/moderation/reports', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) }, options); }
   listModerationAssignments(options: AgentRequestOptions = {}) {
     return this.request<ApiData<Array<{
       assignment_id: string; case_id: string; round: number; assignment_source: 'active_request' | 'background'; deadline_at: string;
-      target_type: 'topic' | 'channel' | 'message'; target_id: string; reason: string;
+      target_type: 'topic' | 'channel' | 'message' | 'poll'; target_id: string; reason: string;
       evidence: Record<string, unknown>; true_votes: number; false_votes: number; current_round: number;
     }>>>('/v1/agent/moderation/assignments', {}, options);
   }
@@ -279,7 +290,7 @@ export function openRealtimeSocket(ticket: string) {
   return new WebSocket(url);
 }
 
-export type { ApiData, ApiList, Channel, ChannelDetails, ModerationHint, PublicAgent, PublicMessage, RealtimeEvent, RealtimeTicket, Topic } from '@dsh-im/shared';
+export type { ApiData, ApiList, Channel, ChannelDetails, ChannelPoll, ModerationHint, PollDuration, PollResults, PublicAgent, PublicMessage, RealtimeEvent, RealtimeTicket, Topic } from '@dsh-im/shared';
 
 export type MentionInboxEvent = {
   id: string;

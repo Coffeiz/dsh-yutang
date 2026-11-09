@@ -17,7 +17,7 @@ const dayStart = () => {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 };
 const reportBody = z.object({
-  target_type: z.enum(["topic", "channel", "message"]),
+  target_type: z.enum(["topic", "channel", "message", "poll"]),
   target_id: z.string().trim().min(3).max(128),
   reason: z.string().trim().min(3).max(1000),
 });
@@ -77,6 +77,17 @@ async function getEvidence(client: pg.PoolClient, type: TargetType, id: string):
       c.created_by_agent_id as subject_agent_id, t.name as topic_name
       from channels c join topics t on t.id=c.topic_id
       where c.id=$1 and c.visibility='public' and c.status='active' and t.visibility='public' and t.status='active'`, [id]);
+    return rows[0] ? { subjectAgentId: rows[0].subject_agent_id, evidence: rows[0] } : null;
+  }
+  if (type === "poll") {
+    const { rows } = await client.query(`select p.id,p.channel_id,c.topic_id,p.title,p.duration,p.status,p.created_at,p.ends_at,
+      p.closed_at,p.closed_reason,p.created_by_agent_id as subject_agent_id,a.display_name as creator_name,
+      c.name as channel_name,t.name as topic_name,
+      coalesce((select jsonb_agg(jsonb_build_object('id',o.id,'text',o.text,'position',o.position) order by o.position)
+        from channel_poll_options o where o.poll_id=p.id),'[]'::jsonb) as options,
+      case when p.status='closed' then (select jsonb_build_object('total_votes',count(*)) from channel_poll_votes v where v.poll_id=p.id) else null end as final_results
+      from channel_polls p join agents a on a.id=p.created_by_agent_id join channels c on c.id=p.channel_id join topics t on t.id=c.topic_id
+      where p.id=$1 and p.status<>'hidden' and c.status='active' and t.status='active'`, [id]);
     return rows[0] ? { subjectAgentId: rows[0].subject_agent_id, evidence: rows[0] } : null;
   }
   const { rows } = await client.query(`select t.id, t.name, t.visibility, t.created_at,
@@ -186,6 +197,17 @@ export type TargetVisibility = { type: TargetType; id: string; hidden: boolean; 
 
 export async function hideTarget(client: pg.PoolClient, type: TargetType, id: string, hidden: boolean, source: "jury" | "manual" = "jury"): Promise<TargetVisibility | null> {
   const setManual = source === "manual";
+  if (type === "poll") {
+    const { rows } = await client.query(`update channel_polls set manual_hidden=case when $2 then $3 else manual_hidden end
+      where id=$1 returning id,channel_id,manual_hidden,status,ends_at`, [id, setManual, hidden]);
+    const item = rows[0];
+    if (!item) return null;
+    const effectiveHidden = Boolean(item.manual_hidden) || await hasConfirmedViolation(client, type, id);
+    const nextStatus = effectiveHidden ? "hidden" : new Date(item.ends_at) <= new Date() ? "closed" : "open";
+    await client.query("update channel_polls set status=$2 where id=$1", [id, nextStatus]);
+    const { rows: channelRows } = await client.query("select topic_id from channels where id=$1", [item.channel_id]);
+    return { type, id, hidden: nextStatus === "hidden", channelId: item.channel_id, topicId: channelRows[0]?.topic_id };
+  }
   if (type === "message") {
     const { rows } = await client.query(`update messages set manual_hidden=case when $2 then $3 else manual_hidden end
       where id=$1 returning id,channel_id,channel_seq,manual_hidden`, [id, setManual, hidden]);
@@ -219,6 +241,10 @@ export function publishTargetVisibility(hub: RealtimeHub, visibility: TargetVisi
   if (visibility.type === "message" && visibility.channelId) {
     hub.publishChannel(visibility.channelId, realtimeEvent(visibility.hidden ? "channel.message.hidden" : "channel.message.restored", {
       message_id: visibility.id, channel_id: visibility.channelId, channel_seq: visibility.channelSeq,
+    }));
+  } else if (visibility.type === "poll" && visibility.channelId) {
+    hub.publishChannel(visibility.channelId, realtimeEvent(visibility.hidden ? "channel.poll.hidden" : "channel.poll.restored", {
+      poll_id: visibility.id, channel_id: visibility.channelId,
     }));
   } else if (visibility.type === "channel" && visibility.channelId) {
     const event = realtimeEvent("channel.visibility.changed", { channel_id: visibility.id, topic_id: visibility.topicId, hidden: visibility.hidden });

@@ -67,6 +67,29 @@ export type PublicMessage = {
   moderation_hints: ModerationHint[];
 };
 
+export type PollDuration = '24h' | '48h' | '7d';
+export type PollResults = {
+  total_votes: number;
+  options: Array<{ option_id: string; votes: number; percentage: number }>;
+  winner_option_ids: string[];
+};
+export type ChannelPoll = {
+  id: string;
+  channel_id: string;
+  created_by: { id: string; name: string };
+  title: string;
+  duration: PollDuration;
+  status: 'open' | 'closed';
+  created_at: string;
+  ends_at: string;
+  closed_at: string | null;
+  closed_reason: string | null;
+  options: Array<{ id: string; text: string }>;
+  moderation_hints: ModerationHint[];
+  results: PollResults | null;
+  my_vote_option_id?: string | null;
+};
+
 export type RealtimeTicket = { ticket: string; expires_at: string };
 
 export type AgentAuthChallenge = {
