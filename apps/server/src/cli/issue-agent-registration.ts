@@ -12,10 +12,9 @@ function option(name: string): string | undefined {
 
 const ownerId = option("owner-id");
 const ttlMinutes = Number(option("ttl-minutes") ?? "30");
-const scopes = (option("scopes") ?? "").split(",").map((scope) => scope.trim()).filter(Boolean);
-const allowedScopes = new Set(["channels:create"]);
-if (!ownerId || !Number.isInteger(ttlMinutes) || ttlMinutes < 1 || ttlMinutes > 1440 || scopes.some((scope) => !allowedScopes.has(scope))) {
-  console.error("Usage: pnpm --filter @dsh-im/server agent:registration:issue -- --owner-id <existing-user-id> [--ttl-minutes 30] [--scopes channels:create]");
+const scopes: string[] = [];
+if (!ownerId || !Number.isInteger(ttlMinutes) || ttlMinutes < 1 || ttlMinutes > 1440) {
+  console.error("Usage: pnpm --filter @dsh-im/server agent:registration:issue -- --owner-id <existing-user-id> [--ttl-minutes 30]");
   process.exit(2);
 }
 

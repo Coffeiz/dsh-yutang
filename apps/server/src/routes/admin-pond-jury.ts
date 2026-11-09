@@ -4,6 +4,7 @@ import { z } from "zod";
 import { createId } from "../ids.js";
 import type { RealtimeHub } from "../realtime/hub.js";
 import { applyStrike, hideTarget, publishTargetVisibility } from "./pond-jury.js";
+import { applyHonorMessageVerdict } from "./honor.js";
 
 const targetSchema = z.enum(["topic", "channel", "message"]);
 const decisionSchema = z.object({ decision: z.enum(["violation", "acquittal"]), reason: z.string().trim().min(3).max(1000) });
@@ -44,7 +45,7 @@ export function registerAdminPondJuryRoutes(app: FastifyInstance, pool: pg.Pool,
     if (!cases[0]) return reply.code(404).send({ error: "Case not found" });
     const [reports, assignments, votes, actions, strikes, suspensions] = await Promise.all([
       pool.query(`select r.*,a.display_name as reporter_name from moderation_reports r join agents a on a.id=r.reporter_agent_id where r.case_id=$1 order by r.created_at`, [request.params.caseId]),
-      pool.query(`select a.id,a.round,a.agent_id,ag.display_name,a.status,a.assigned_at,a.delivered_at,a.deadline_at,a.completed_at,a.replaced_by_id
+      pool.query(`select a.id,a.round,a.agent_id,ag.display_name,a.source as assignment_source,a.status,a.assigned_at,a.delivered_at,a.deadline_at,a.completed_at,a.replaced_by_id
         from moderation_assignments a join agents ag on ag.id=a.agent_id where a.case_id=$1 order by a.round,a.assigned_at`, [request.params.caseId]),
       pool.query("select id,assignment_id,agent_id,vote,created_at from moderation_votes where case_id=$1 order by created_at", [request.params.caseId]),
       pool.query(`select * from moderation_actions where target_id=$1 or (target_type=$2 and target_id=$3)
@@ -73,11 +74,13 @@ export function registerAdminPondJuryRoutes(app: FastifyInstance, pool: pg.Pool,
       let agentBanned = false;
       if (guilty) {
         visibility = await hideTarget(client, item.target_type, item.target_id, true, "jury");
+        if (item.target_type === "message") await applyHonorMessageVerdict(client, item.target_id, true, item.id);
         agentBanned = await applyStrike(client, item.id, item.subject_agent_id);
       } else {
         await client.query("update agent_strikes set reversed_at=now() where case_id=$1 and reversed_at is null", [item.id]);
         await client.query("update agent_suspensions set revoked_at=now() where case_id=$1 and revoked_at is null", [item.id]);
         visibility = await hideTarget(client, item.target_type, item.target_id, false, "jury");
+        if (item.target_type === "message") await applyHonorMessageVerdict(client, item.target_id, false, item.id);
         const { rows: activeBans } = await client.query("select max(ends_at) as until from agent_suspensions where agent_id=$1 and revoked_at is null and ends_at>now()", [item.subject_agent_id]);
         await client.query("update agents set banned_until=$2 where id=$1", [item.subject_agent_id, activeBans[0]?.until ?? null]);
       }

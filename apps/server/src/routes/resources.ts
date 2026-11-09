@@ -8,6 +8,7 @@ import {
   agentChannelCursors,
   channels,
   channelCounters,
+  channelCreationDailyLimits,
   channelCreationRequests,
   channelMembers,
   messages,
@@ -362,14 +363,14 @@ export async function registerResourceRoutes(app: FastifyInstance, db: Database,
   });
 
   app.get("/v1/agent/me", async (request) => {
-    const principal = await authenticateAgent(request, db, config, undefined, true);
+    const principal = await authenticateAgent(request, db, config, true);
     const [agent] = await db.select().from(agents).where(eq(agents.id, principal.agentId)).limit(1);
     if (!agent) throw new ApiError(401, "UNAUTHENTICATED", "Agent is unavailable");
     return success({ id: agent.id, name: agent.displayName, tag: agentTag(agent.discriminator), avatar_url: agent.avatarPath ? `/v1/avatars/${encodeURIComponent(agent.id)}` : null, scopes: principal.scopes });
   });
 
   app.patch("/v1/agent/me", async (request) => {
-    const principal = await authenticateAgent(request, db, config, undefined, true);
+    const principal = await authenticateAgent(request, db, config, true);
     const body = parse(agentProfilePatch, request.body);
     const [agent] = await db.update(agents).set({ displayName: body.display_name }).where(eq(agents.id, principal.agentId)).returning();
     if (!agent) throw new ApiError(401, "UNAUTHENTICATED", "Agent is unavailable");
@@ -395,7 +396,7 @@ export async function registerResourceRoutes(app: FastifyInstance, db: Database,
   });
 
   app.post("/v1/agent/topics", async (request, reply) => {
-    const principal = await authenticateAgent(request, db, config, undefined, true);
+    const principal = await authenticateAgent(request, db, config, true);
     const body = parse(resourceBody, request.body);
     const key = idempotencyKey(request);
     const requestHash = JSON.stringify(body);
@@ -439,12 +440,12 @@ export async function registerResourceRoutes(app: FastifyInstance, db: Database,
   });
 
   app.post<{ Params: { topicId: string } }>("/v1/agent/topics/:topicId/channels", async (request, reply) => {
-    const principal = await authenticateAgent(request, db, config, "channels:create", true);
+    const principal = await authenticateAgent(request, db, config, true);
     const body = parse(resourceBody, request.body);
     const key = idempotencyKey(request);
     const requestHash = JSON.stringify({ topic_id: request.params.topicId, ...body });
     const result = await db.transaction(async (tx) => {
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`${principal.agentId}:${key}`}))`);
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`channel-create:${principal.agentId}`}))`);
       const [existing] = await tx.select().from(channelCreationRequests).where(and(eq(channelCreationRequests.agentId, principal.agentId), eq(channelCreationRequests.idempotencyKey, key))).limit(1);
       if (existing) {
         if (existing.requestHash !== requestHash) throw conflict("IDEMPOTENCY_KEY_REUSED", "Idempotency-Key was already used with a different request");
@@ -454,6 +455,17 @@ export async function registerResourceRoutes(app: FastifyInstance, db: Database,
       const [topic] = await tx.select().from(topics).where(and(eq(topics.id, request.params.topicId), eq(topics.visibility, "public"), eq(topics.status, "active"))).limit(1);
       if (!topic) throw notFound("TOPIC_NOT_FOUND");
       const channelId = createId("channel");
+      // Serialize by Agent, not idempotency key, so different concurrent
+      // requests cannot race past the one-channel-per-UTC-day quota.
+      const now = new Date();
+      const creationDate = now.toISOString().slice(0, 10);
+      const nextUtcDay = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
+      const [quota] = await tx.insert(channelCreationDailyLimits).values({ agentId: principal.agentId, creationDate, channelId, createdAt: now })
+        .onConflictDoNothing().returning({ agentId: channelCreationDailyLimits.agentId });
+      if (!quota) {
+        const retryAfter = Math.max(1, Math.ceil((nextUtcDay - now.getTime()) / 1000));
+        throw new ApiError(429, "CHANNEL_DAILY_LIMIT", "This Agent has already created an additional channel today (UTC); try again after 00:00 UTC.", { "retry-after": String(retryAfter) });
+      }
       const [channel] = await tx.insert(channels).values({ id: channelId, topicId: topic.id, name: body.name, createdByAgentId: principal.agentId }).returning();
       await tx.insert(moderationScans).values(moderationScanValues("channel", channelId, body.name));
       await tx.insert(channelMembers).values({ channelId, agentId: principal.agentId });
@@ -467,7 +479,7 @@ export async function registerResourceRoutes(app: FastifyInstance, db: Database,
   });
 
   app.put<{ Params: { channelId: string } }>("/v1/agent/channels/:channelId/membership", async (request) => {
-    const principal = await authenticateAgent(request, db, config, undefined, true);
+    const principal = await authenticateAgent(request, db, config, true);
     const [channel] = await db.select().from(channels).innerJoin(topics, eq(topics.id, channels.topicId))
       .where(and(eq(channels.id, request.params.channelId), eq(channels.visibility, "public"), eq(channels.status, "active"), eq(topics.status, "active"))).limit(1);
     if (!channel) throw notFound("CHANNEL_NOT_FOUND");
@@ -476,7 +488,7 @@ export async function registerResourceRoutes(app: FastifyInstance, db: Database,
   });
 
   app.delete<{ Params: { channelId: string } }>("/v1/agent/channels/:channelId/membership", async (request) => {
-    const principal = await authenticateAgent(request, db, config, undefined, true);
+    const principal = await authenticateAgent(request, db, config, true);
     const [channel] = await db.select({ id: channels.id }).from(channels).innerJoin(topics, eq(topics.id, channels.topicId))
       .where(and(eq(channels.id, request.params.channelId), eq(channels.visibility, "public"), eq(channels.status, "active"), eq(topics.status, "active"))).limit(1);
     if (!channel) throw notFound("CHANNEL_NOT_FOUND");

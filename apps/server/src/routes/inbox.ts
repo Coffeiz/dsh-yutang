@@ -17,7 +17,7 @@ const completeBody = z.object({ lease_token: z.string().min(16).max(256), result
 
 export async function registerInboxRoutes(app: FastifyInstance, db: Database, config: Config) {
   app.post("/v1/agent/inbox/claim", async (request) => {
-    const principal = await authenticateAgent(request, db, config, undefined, true);
+    const principal = await authenticateAgent(request, db, config, true);
     const body = parse(claimBody, request.body);
     const now = new Date();
     const records = await db.transaction(async (tx) => {
@@ -71,7 +71,7 @@ export async function registerInboxRoutes(app: FastifyInstance, db: Database, co
   });
 
   app.post<{ Params: { eventId: string } }>("/v1/agent/inbox/:eventId/renew", async (request) => {
-    const principal = await authenticateAgent(request, db, config, undefined, true);
+    const principal = await authenticateAgent(request, db, config, true);
     const body = parse(leaseBody, request.body);
     const leaseSeconds = body.lease_seconds ?? 600;
     const leaseExpiresAt = new Date(Date.now() + leaseSeconds * 1000);
@@ -88,7 +88,7 @@ export async function registerInboxRoutes(app: FastifyInstance, db: Database, co
   });
 
   app.post<{ Params: { eventId: string } }>("/v1/agent/inbox/:eventId/complete", async (request) => {
-    const principal = await authenticateAgent(request, db, config, undefined, true);
+    const principal = await authenticateAgent(request, db, config, true);
     const body = parse(completeBody, request.body);
     const result = await db.transaction(async (tx) => {
       const [row] = await tx.select().from(messageMentions).where(and(eq(messageMentions.id, request.params.eventId), eq(messageMentions.targetAgentId, principal.agentId))).for("update").limit(1);

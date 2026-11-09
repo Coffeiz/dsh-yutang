@@ -13,11 +13,8 @@ function option(name: string): string | undefined {
 const ownerId = option("owner-id");
 const agentId = option("agent-id");
 const publicKeyFile = option("public-key-file");
-const scopesArgument = option("scopes");
-const allowedScopes = new Set(["channels:create"]);
-const scopes = scopesArgument?.split(",").map((scope) => scope.trim()).filter(Boolean);
-if (!ownerId || !agentId || !publicKeyFile || scopes?.some((scope) => !allowedScopes.has(scope))) {
-  console.error("Usage: pnpm --filter @dsh-im/server agent:key:bind -- --owner-id <owner-id> --agent-id <agent-id> --public-key-file <ed25519-public.pem> [--scopes channels:create]");
+if (!ownerId || !agentId || !publicKeyFile) {
+  console.error("Usage: pnpm --filter @dsh-im/server agent:key:bind -- --owner-id <owner-id> --agent-id <agent-id> --public-key-file <ed25519-public.pem>");
   process.exit(2);
 }
 
@@ -39,12 +36,10 @@ try {
   if (existingKey && existingKey.agentId !== agentId) throw new Error("This public key is already bound to another Agent.");
 
   await db.transaction(async (tx) => {
-    const [latestCredential] = scopes === undefined
-      ? await tx.select({ scopes: agentCredentials.scopes }).from(agentCredentials)
-          .where(and(eq(agentCredentials.agentId, agentId), isNull(agentCredentials.revokedAt)))
-          .orderBy(desc(agentCredentials.createdAt)).limit(1)
-      : [];
-    const keyScopes = scopes ?? latestCredential?.scopes ?? [];
+    const [latestCredential] = await tx.select({ scopes: agentCredentials.scopes }).from(agentCredentials)
+      .where(and(eq(agentCredentials.agentId, agentId), isNull(agentCredentials.revokedAt)))
+      .orderBy(desc(agentCredentials.createdAt)).limit(1);
+    const keyScopes = latestCredential?.scopes.filter((scope) => scope !== "channels:create") ?? [];
     const now = new Date();
     await tx.insert(agentIdentityKeys).values({ agentId, ...identityKey, scopes: keyScopes })
       .onConflictDoUpdate({ target: agentIdentityKeys.agentId, set: { ...identityKey, scopes: keyScopes, rotatedAt: now } });
@@ -52,7 +47,7 @@ try {
       .where(and(eq(agentCredentials.agentId, agentId), isNull(agentCredentials.revokedAt)));
     await tx.delete(agentAuthChallenges).where(eq(agentAuthChallenges.agentId, agentId));
   });
-  console.log(JSON.stringify({ agent_id: agentId, fingerprint: identityKey.fingerprint, scopes: scopes ?? "preserved", authentication: "ed25519-challenge" }, null, 2));
+  console.log(JSON.stringify({ agent_id: agentId, fingerprint: identityKey.fingerprint, scopes: "preserved except retired channel-creation scope", authentication: "ed25519-challenge" }, null, 2));
   console.error("All existing Agent tokens were revoked. Authenticate this DSH Profile using a signed server challenge.");
 } catch (error) {
   console.error(error instanceof Error ? error.message : "Agent key binding failed");

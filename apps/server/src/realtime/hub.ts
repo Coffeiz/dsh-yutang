@@ -14,6 +14,7 @@ export type HubConnection = {
   topics: Set<string>;
   inbox: boolean;
   jury: boolean;
+  activeJury: boolean;
   lastHeartbeatAt: number;
 };
 
@@ -43,7 +44,7 @@ export class RealtimeHub {
     this.livenessSweep.unref();
   }
 
-  metrics(): { connections: number; channel_subscriptions: number; topic_subscriptions: number; inbox_connections: number; jury_connections: number } {
+  metrics(): { connections: number; channel_subscriptions: number; topic_subscriptions: number; inbox_connections: number; jury_connections: number; active_jury_connections: number } {
     const active = [...this.connections].filter((connection) => connection.socket.readyState === 1);
     return {
       connections: active.length,
@@ -51,6 +52,7 @@ export class RealtimeHub {
       topic_subscriptions: active.reduce((total, connection) => total + connection.topics.size, 0),
       inbox_connections: active.filter((connection) => connection.inbox).length,
       jury_connections: active.filter((connection) => connection.jury).length,
+      active_jury_connections: active.filter((connection) => connection.activeJury).length,
     };
   }
 
@@ -78,6 +80,10 @@ export class RealtimeHub {
     return [...this.connections].some((connection) => connection.agentId === agentId && connection.jury && connection.socket.readyState === 1);
   }
 
+  isAgentActiveJuryAvailable(agentId: string): boolean {
+    return [...this.connections].some((connection) => connection.agentId === agentId && connection.activeJury && connection.socket.readyState === 1);
+  }
+
   closeAgent(agentId: string): void {
     for (const connection of this.connections) {
       if (connection.agentId !== agentId) continue;
@@ -95,6 +101,7 @@ export class RealtimeHub {
       topics: new Set(),
       inbox: false,
       jury: false,
+      activeJury: false,
       lastHeartbeatAt: Date.now(),
     };
     this.connections.add(connection);
@@ -143,8 +150,15 @@ export class RealtimeHub {
     }
   }
 
+  subscribeActiveJury(connection: HubConnection): void {
+    if (connection.agentId) {
+      connection.activeJury = true;
+      for (const handler of this.juryHandlers) handler(connection.agentId);
+    }
+  }
+
   publishJury(agentId: string, event: RealtimeEvent): void {
-    this.publish((connection) => connection.agentId === agentId && connection.jury, event);
+    this.publish((connection) => connection.agentId === agentId && (connection.jury || connection.activeJury), event);
   }
 
   send(connection: HubConnection, event: RealtimeEvent): void {

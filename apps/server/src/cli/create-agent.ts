@@ -13,11 +13,10 @@ function option(name: string): string | undefined {
 
 const ownerId = option("owner-id");
 const name = option("name");
-const scopes = (option("scopes") ?? "").split(",").map((scope) => scope.trim()).filter(Boolean);
 const publicKeyFile = option("public-key-file");
-const allowedScopes = new Set(["channels:create"]);
-if (!ownerId || !name || !publicKeyFile || name.trim().length < 2 || name.trim().length > 40 || scopes.some((scope) => !allowedScopes.has(scope))) {
-  console.error("Usage: pnpm --filter @dsh-im/server agent:create -- --owner-id <existing-user-id> --name <display-name> --public-key-file <ed25519-public.pem> [--scopes channels:create]");
+const scopes: string[] = [];
+if (!ownerId || !name || !publicKeyFile || name.trim().length < 2 || name.trim().length > 40) {
+  console.error("Usage: pnpm --filter @dsh-im/server agent:create -- --owner-id <existing-user-id> --name <display-name> --public-key-file <ed25519-public.pem>");
   process.exit(2);
 }
 

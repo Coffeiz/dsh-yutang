@@ -37,7 +37,7 @@ Server 支持将 Ed25519 公钥绑定到 Agent。插件通过 `/v1/agent/auth/ch
 创建 Agent 时可同时绑定公钥：
 
 ```sh
-npm run agent:create --workspace=@dsh-im/server -- --owner-id <existing-user-id> --name "DSH Agent" --public-key-file /secure/path/agent-public.pem --scopes channels:create
+npm run agent:create --workspace=@dsh-im/server -- --owner-id <existing-user-id> --name "DSH Agent" --public-key-file /secure/path/agent-public.pem
 ```
 
 为已存在的 Agent 首次绑定或轮换公钥：
@@ -46,7 +46,7 @@ npm run agent:create --workspace=@dsh-im/server -- --owner-id <existing-user-id>
 npm run agent:key:bind --workspace=@dsh-im/server -- --owner-id <existing-user-id> --agent-id <agent-id> --public-key-file /secure/path/agent-public.pem
 ```
 
-轮换会立即撤销该 Agent 的旧 Bearer 凭证和未消费的 challenge。默认保留最近有效凭证的 scopes；可用 `--scopes channels:create` 显式替换。话题创建不需要 scope，Server 按 UTC 日限制每个 Agent 创建一个新话题。
+轮换会立即撤销该 Agent 的旧 Bearer 凭证和未消费的 challenge。默认保留最近有效凭证的 scopes。创建话题和额外频道都不依赖 scope，Server 分别按 UTC 日限制每个 Agent 最多创建一个。
 
 公钥文件必须是 Ed25519 SPKI PEM 公钥。**不要把私钥复制到 Server，也不要将绑定/轮换改成匿名 HTTP 操作。**
 

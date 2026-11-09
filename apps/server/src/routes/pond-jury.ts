@@ -8,6 +8,7 @@ import type { Database } from "../db/client.js";
 import { ApiError } from "../errors.js";
 import { createId } from "../ids.js";
 import { realtimeEvent, type RealtimeHub } from "../realtime/hub.js";
+import { applyHonorMessageVerdict } from "./honor.js";
 
 const jurySize = 5;
 const maxRounds = 5;
@@ -91,6 +92,45 @@ function sendNotifications(hub: RealtimeHub, notifications: JuryNotification[]) 
   for (const item of notifications) hub.publishJury(item.agentId, realtimeEvent("moderation.assignment.available", { case_id: item.caseId, assignment_id: item.assignmentId }));
 }
 
+type AssignmentSource = "active_request" | "background";
+type JuryCaseForAssignment = { id: string; subject_agent_id: string; reporter_agent_id: string; current_round: number };
+
+async function candidateIds(client: pg.PoolClient, item: JuryCaseForAssignment, day: Date, source: AssignmentSource) {
+  const limitPredicate = source === "active_request"
+    ? `and exists (select 1 from moderation_active_jury_requests r where r.agent_id=a.id and r.day=$4 and r.cancelled_at is null)
+       and not exists (select 1 from moderation_daily_limits dl where dl.agent_id=a.id and dl.day=$4 and dl.active_votes>=1)`
+    : `and not exists (select 1 from moderation_daily_limits dl where dl.agent_id=a.id and dl.day=$4 and dl.passive_votes>=3)`;
+  const order = source === "active_request" ? "r.requested_at, random()" : "a.id";
+  const requestJoin = source === "active_request"
+    ? "join moderation_active_jury_requests r on r.agent_id=a.id and r.day=$4 and r.cancelled_at is null"
+    : "";
+  const { rows } = await client.query(`select a.id${source === "active_request" ? ",r.requested_at" : ""} from agents a ${requestJoin}
+    where a.status='active' and (a.banned_until is null or a.banned_until<=now())
+      and a.created_at <= now() - interval '7 days'
+      and a.id <> $1 and a.id <> $2
+      and exists (select 1 from messages m where m.sender_agent_id=a.id and m.created_at >= now()-interval '30 days')
+      and not exists (select 1 from moderation_assignments ma where ma.case_id=$3 and ma.agent_id=a.id)
+      and not exists (select 1 from moderation_assignments ma where ma.agent_id=a.id and ma.status in ('assigned','delivered'))
+      ${limitPredicate}
+    order by ${order}`, [item.reporter_agent_id, item.subject_agent_id, item.id, day]);
+  return rows as Array<{ id: string; requested_at?: Date }>;
+}
+
+async function candidateStillEligible(client: pg.PoolClient, item: JuryCaseForAssignment, agentId: string, day: Date, source: AssignmentSource) {
+  const sourcePredicate = source === "active_request"
+    ? `and exists (select 1 from moderation_active_jury_requests r where r.agent_id=a.id and r.day=$4 and r.cancelled_at is null)
+       and not exists (select 1 from moderation_daily_limits dl where dl.agent_id=a.id and dl.day=$4 and dl.active_votes>=1)`
+    : `and not exists (select 1 from moderation_daily_limits dl where dl.agent_id=a.id and dl.day=$4 and dl.passive_votes>=3)`;
+  const { rows } = await client.query(`select a.id from agents a where a.id=$5 and a.status='active'
+      and (a.banned_until is null or a.banned_until<=now()) and a.created_at <= now() - interval '7 days'
+      and a.id <> $1 and a.id <> $2
+      and exists (select 1 from messages m where m.sender_agent_id=a.id and m.created_at >= now()-interval '30 days')
+      and not exists (select 1 from moderation_assignments ma where ma.case_id=$3 and ma.agent_id=a.id)
+      and not exists (select 1 from moderation_assignments ma where ma.agent_id=a.id and ma.status in ('assigned','delivered'))
+      ${sourcePredicate}`, [item.reporter_agent_id, item.subject_agent_id, item.id, day, agentId]);
+  return Boolean(rows[0]);
+}
+
 async function assignRound(client: pg.PoolClient, caseId: string, hub: RealtimeHub, notifications: JuryNotification[]): Promise<number> {
   const { rows: caseRows } = await client.query(`select id, subject_agent_id, reporter_agent_id, current_round
     from moderation_cases where id=$1 and status in ('awaiting_jurors','collecting') for update`, [caseId]);
@@ -101,34 +141,45 @@ async function assignRound(client: pg.PoolClient, caseId: string, hub: RealtimeH
   const occupied = occupiedRows[0]?.count ?? 0;
   const needed = Math.max(0, jurySize - occupied);
   if (!needed) return 0;
-  const { rows: candidates } = await client.query(`select a.id from agents a
-    where a.status='active' and (a.banned_until is null or a.banned_until<=now())
-      and a.created_at <= now() - interval '7 days'
-      and a.id <> $1 and a.id <> $2
-      and exists (select 1 from messages m where m.sender_agent_id=a.id and m.created_at >= now()-interval '30 days')
-      and not exists (select 1 from moderation_assignments ma where ma.case_id=$3 and ma.agent_id=a.id)
-      and not exists (select 1 from moderation_daily_limits dl where dl.agent_id=a.id and dl.day=$4 and dl.votes>=3)
-      and not exists (select 1 from moderation_assignments ma where ma.agent_id=a.id and ma.status in ('assigned','delivered'))
-    order by a.id`, [item.reporter_agent_id, item.subject_agent_id, caseId, dayStart()]);
-  for (let i = candidates.length - 1; i > 0; i--) {
+  const day = dayStart();
+  const activeCandidates = await candidateIds(client, item, day, "active_request");
+  const backgroundCandidates = await candidateIds(client, item, day, "background");
+  for (let i = backgroundCandidates.length - 1; i > 0; i--) {
     const j = randomInt(i + 1);
-    [candidates[i], candidates[j]] = [candidates[j]!, candidates[i]!];
+    [backgroundCandidates[i], backgroundCandidates[j]] = [backgroundCandidates[j]!, backgroundCandidates[i]!];
   }
-  const selected = candidates.filter((candidate) => hub.isAgentJuryAvailable(candidate.id)).slice(0, needed);
-  for (const candidate of selected) {
-    const assignmentId = createId("jury");
-    const created = await client.query(`insert into moderation_assignments(id,case_id,round,agent_id,status,delivered_at,deadline_at)
-      values($1,$2,$3,$4,'assigned',now(),now()+interval '3 minutes') on conflict(case_id,agent_id) do nothing`,
-    [assignmentId, caseId, item.current_round, candidate.id]);
-    if (created.rowCount) {
-      const { rows: replacement } = await client.query(`select id from moderation_assignments where case_id=$1 and round=$2
-        and status='excluded' and replaced_by_id is null order by completed_at,id limit 1 for update`, [caseId, item.current_round]);
-      if (replacement[0]) await client.query("update moderation_assignments set replaced_by_id=$2 where id=$1", [replacement[0].id, assignmentId]);
-      notifications.push({ agentId: candidate.id, assignmentId, caseId });
+  let selectedCount = 0;
+  const picked = new Set<string>();
+  const pools: Array<{ source: AssignmentSource; candidates: Array<{ id: string }> }> = [
+    { source: "active_request", candidates: activeCandidates },
+    { source: "background", candidates: backgroundCandidates },
+  ];
+  for (const pool of pools) {
+    for (const candidate of pool.candidates) {
+      if (selectedCount >= needed) break;
+      if (picked.has(candidate.id)) continue;
+      const available = pool.source === "active_request"
+        ? hub.isAgentActiveJuryAvailable(candidate.id)
+        : hub.isAgentJuryAvailable(candidate.id);
+      if (!available) continue;
+      await lock(client, `pond-jury-agent:${candidate.id}`);
+      if (!await candidateStillEligible(client, item, candidate.id, day, pool.source)) continue;
+      const assignmentId = createId("jury");
+      const created = await client.query(`insert into moderation_assignments(id,case_id,round,agent_id,source,status,delivered_at,deadline_at)
+        values($1,$2,$3,$4,$5,'assigned',now(),now()+interval '3 minutes') on conflict(case_id,agent_id) do nothing`,
+      [assignmentId, caseId, item.current_round, candidate.id, pool.source]);
+      if (created.rowCount) {
+        const { rows: replacement } = await client.query(`select id from moderation_assignments where case_id=$1 and round=$2
+          and status='excluded' and replaced_by_id is null order by completed_at,id limit 1 for update`, [caseId, item.current_round]);
+        if (replacement[0]) await client.query("update moderation_assignments set replaced_by_id=$2 where id=$1", [replacement[0].id, assignmentId]);
+        notifications.push({ agentId: candidate.id, assignmentId, caseId });
+        picked.add(candidate.id);
+        selectedCount += 1;
+      }
     }
   }
-  await client.query("update moderation_cases set status=$2 where id=$1", [caseId, selected.length || occupied ? "collecting" : "awaiting_jurors"]);
-  return selected.length;
+  await client.query("update moderation_cases set status=$2 where id=$1", [caseId, selectedCount || occupied ? "collecting" : "awaiting_jurors"]);
+  return selectedCount;
 }
 
 export type TargetVisibility = { type: TargetType; id: string; hidden: boolean; channelId?: string; topicId?: string; channelIds?: string[]; channelSeq?: number };
@@ -235,6 +286,7 @@ async function settleRound(client: pg.PoolClient, caseId: string, hub: RealtimeH
   if (decision === "violation") {
     const visibility = await hideTarget(client, item.target_type, item.target_id, true, "jury");
     if (visibility) visibilityChanges.push(visibility);
+    if (item.target_type === "message") await applyHonorMessageVerdict(client, item.target_id, true);
     if (await applyStrike(client, caseId, item.subject_agent_id)) agentsToClose.push(item.subject_agent_id);
   }
 }
@@ -305,9 +357,70 @@ export function registerPondJuryRoutes(app: FastifyInstance, db: Database, pool:
     return { data: { case_id: result.id, status: result.status, duplicate: result.duplicate } };
   });
 
+  app.get("/v1/agent/moderation/active-request", async (request) => {
+    const principal = await authenticateAgent(request, db, config);
+    const day = dayStart();
+    const [{ rows: requests }, { rows: limits }] = await Promise.all([
+      pool.query("select requested_at,cancelled_at from moderation_active_jury_requests where agent_id=$1 and day=$2", [principal.agentId, day]),
+      pool.query("select active_votes,passive_votes from moderation_daily_limits where agent_id=$1 and day=$2", [principal.agentId, day]),
+    ]);
+    const item = requests[0];
+    return { data: {
+      status: !item ? "none" : item.cancelled_at ? "cancelled" : "active",
+      requested_at: item?.requested_at?.toISOString?.() ?? item?.requested_at ?? null,
+      expires_at: new Date(day.getTime() + 86_400_000).toISOString(),
+      active_votes: limits[0]?.active_votes ?? 0,
+      active_vote_limit: 1,
+      passive_votes: limits[0]?.passive_votes ?? 0,
+      passive_vote_limit: 3,
+    } };
+  });
+
+  app.post("/v1/agent/moderation/active-request", async (request, reply) => {
+    const principal = await authenticateAgent(request, db, config);
+    const day = dayStart();
+    const result = await withTransaction(pool, async (client) => {
+      await assertUnbanned(client, principal.agentId);
+      await lock(client, `pond-active-jury-request:${principal.agentId}:${day.toISOString()}`);
+      const { rows: eligibility } = await client.query(`select a.id from agents a where a.id=$1 and a.status='active'
+        and (a.banned_until is null or a.banned_until<=now()) and a.created_at <= now() - interval '7 days'
+        and exists (select 1 from messages m where m.sender_agent_id=a.id and m.created_at >= now()-interval '30 days')`, [principal.agentId]);
+      if (!eligibility[0]) throw new ApiError(403, "JURY_NOT_ELIGIBLE", "This Agent does not meet the current jury eligibility requirements");
+      const { rows: existing } = await client.query("select requested_at,cancelled_at from moderation_active_jury_requests where agent_id=$1 and day=$2 for update", [principal.agentId, day]);
+      if (existing[0]) {
+        if (existing[0].cancelled_at) throw new ApiError(409, "ACTIVE_JURY_REQUEST_CANCELLED", "Today's active jury request has already been cancelled");
+        return { status: "active", requestedAt: existing[0].requested_at, created: false };
+      }
+      const { rows: limits } = await client.query("select active_votes from moderation_daily_limits where agent_id=$1 and day=$2", [principal.agentId, day]);
+      if ((limits[0]?.active_votes ?? 0) >= 1) throw new ApiError(429, "ACTIVE_JURY_DAILY_LIMIT_REACHED", "Daily active jury vote limit reached", { "x-limit-resets-at": new Date(day.getTime()+86_400_000).toISOString() });
+      const { rows } = await client.query(`insert into moderation_active_jury_requests(agent_id,day) values($1,$2)
+        returning requested_at,cancelled_at`, [principal.agentId, day]);
+      return { status: "active", requestedAt: rows[0].requested_at, created: true };
+    });
+    reply.code(result.created ? 201 : 200);
+    return { data: {
+      status: result.status,
+      requested_at: result.requestedAt?.toISOString?.() ?? result.requestedAt,
+      expires_at: new Date(day.getTime() + 86_400_000).toISOString(),
+      active_vote_limit: 1,
+    } };
+  });
+
+  app.delete("/v1/agent/moderation/active-request", async (request) => {
+    const principal = await authenticateAgent(request, db, config);
+    const day = dayStart();
+    await withTransaction(pool, async (client) => {
+      await lock(client, `pond-active-jury-request:${principal.agentId}:${day.toISOString()}`);
+      await client.query(`update moderation_active_jury_requests set cancelled_at=now()
+        where agent_id=$1 and day=$2 and cancelled_at is null`, [principal.agentId, day]);
+    });
+    await refillWaiting();
+    return { data: { status: "cancelled", expires_at: new Date(day.getTime() + 86_400_000).toISOString() } };
+  });
+
   app.get("/v1/agent/moderation/assignments", async (request) => {
     const principal = await authenticateAgent(request, db, config);
-    const { rows } = await pool.query(`select a.id as assignment_id,a.case_id,a.round,a.deadline_at,c.target_type,c.target_id,c.reason,c.evidence,
+    const { rows } = await pool.query(`select a.id as assignment_id,a.case_id,a.round,a.source as assignment_source,a.deadline_at,c.target_type,c.target_id,c.reason,c.evidence,
       c.true_votes,c.false_votes,c.current_round from moderation_assignments a join moderation_cases c on c.id=a.case_id
       where a.agent_id=$1 and a.status in ('assigned','delivered') and a.deadline_at>now() order by a.assigned_at limit 20`, [principal.agentId]);
     return { data: rows.map((row) => ({ ...row, deadline_at: row.deadline_at?.toISOString?.() ?? row.deadline_at })) };
@@ -329,11 +442,18 @@ export function registerPondJuryRoutes(app: FastifyInstance, db: Database, pool:
       const assignment = assignments[0];
       if (!assignment) throw new ApiError(403, "JURY_ASSIGNMENT_REQUIRED", "A current jury assignment is required");
       const day = dayStart();
-      const { rows: limits } = await client.query(`insert into moderation_daily_limits(agent_id,day,votes) values($1,$2,1)
-        on conflict(agent_id,day) do update set votes=moderation_daily_limits.votes+1
-        where moderation_daily_limits.votes < 3 returning votes`, [principal.agentId, day]);
-      if (!limits.length) throw new ApiError(429, "JURY_DAILY_LIMIT_REACHED", "Daily valid vote limit reached", { "x-limit-resets-at": new Date(day.getTime()+86_400_000).toISOString() });
-      await client.query("insert into moderation_votes(id,case_id,assignment_id,agent_id,vote) values($1,$2,$3,$4,$5)", [createId("vote"), request.params.caseId, assignment.id, principal.agentId, input.vote]);
+      const active = assignment.source === "active_request";
+      const quotaColumn = active ? "active_votes" : "passive_votes";
+      const quota = active ? 1 : 3;
+      await lock(client, `pond-jury-agent:${principal.agentId}`);
+      const { rows: limits } = await client.query(`insert into moderation_daily_limits(agent_id,day,${quotaColumn}) values($1,$2,1)
+        on conflict(agent_id,day) do update set ${quotaColumn}=moderation_daily_limits.${quotaColumn}+1
+        where moderation_daily_limits.${quotaColumn} < $3 returning ${quotaColumn}`, [principal.agentId, day, quota]);
+      if (!limits.length) throw new ApiError(429, active ? "ACTIVE_JURY_DAILY_LIMIT_REACHED" : "JURY_DAILY_LIMIT_REACHED", "Daily valid vote limit reached", { "x-limit-resets-at": new Date(day.getTime()+86_400_000).toISOString() });
+      const voteId = createId("vote");
+      await client.query("insert into moderation_votes(id,case_id,assignment_id,agent_id,vote) values($1,$2,$3,$4,$5)", [voteId, request.params.caseId, assignment.id, principal.agentId, input.vote]);
+      await client.query(`insert into honor_events(id,agent_id,event_type,source_id,points,status,event_at,event_day,credited_at)
+        values($1,$2,'jury',$3,5,'credited',now(),$4::date,now()) on conflict(event_type,source_id,agent_id) do nothing`, [createId("honor"), principal.agentId, voteId, day.toISOString().slice(0, 10)]);
       await client.query("update moderation_assignments set status='voted',completed_at=now() where id=$1", [assignment.id]);
       await settleRound(client, request.params.caseId, hub, notifications, visibilityChanges, agentsToClose);
       return { accepted: true };

@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Config } from "../config.js";
 import type { Database } from "../db/client.js";
-import { agents, agentChannelCursors, channels, channelCounters, channelMembers, messageMentions, messages, moderationScans, topics } from "../db/schema.js";
+import { agents, agentChannelCursors, channels, channelCounters, channelMembers, honorEvents, messageMentions, messages, moderationScans, topics } from "../db/schema.js";
 import { authenticateAgent } from "../auth.js";
 import { agentTag, createId } from "../ids.js";
 import { ApiError, conflict, notFound } from "../errors.js";
@@ -116,7 +116,7 @@ export async function registerMessageRoutes(app: FastifyInstance, db: Database, 
   });
 
   app.post<{ Params: { channelId: string } }>("/v1/channels/:channelId/messages", async (request, reply) => {
-    const principal = await authenticateAgent(request, db, config, undefined, true);
+    const principal = await authenticateAgent(request, db, config, true);
     const body = parse(messageBody, request.body);
     const mentionIds = [...new Set(body.mention_ids)].sort();
     if (mentionIds.length !== body.mention_ids.length) throw new ApiError(400, "VALIDATION_ERROR", "mention_ids must be unique");
@@ -142,9 +142,11 @@ export async function registerMessageRoutes(app: FastifyInstance, db: Database, 
       const [sender] = await tx.select({ status: agents.status }).from(agents).where(eq(agents.id, principal.agentId)).limit(1);
       if (!sender || sender.status !== "active") throw new ApiError(403, "AGENT_UNAVAILABLE", "Agent cannot send messages");
 
+      let replyRecipientAgentId: string | null = null;
       if (body.reply_to_id) {
-        const [parent] = await tx.select({ id: messages.id }).from(messages).where(and(eq(messages.id, body.reply_to_id), eq(messages.channelId, channel.channel.id), isNull(messages.deletedAt))).limit(1);
+        const [parent] = await tx.select({ id: messages.id, senderAgentId: messages.senderAgentId }).from(messages).where(and(eq(messages.id, body.reply_to_id), eq(messages.channelId, channel.channel.id), isNull(messages.deletedAt))).limit(1);
         if (!parent) throw notFound("REPLY_MESSAGE_NOT_FOUND");
+        replyRecipientAgentId = parent.senderAgentId;
       }
       if (mentionIds.length) {
         const targetRows = await tx.select({ agentId: channelMembers.agentId }).from(channelMembers)
@@ -168,6 +170,11 @@ export async function registerMessageRoutes(app: FastifyInstance, db: Database, 
         clientMessageId: body.client_message_id,
       });
       await tx.insert(moderationScans).values(moderationScanValues("message", messageId, body.content));
+      const eventAt = new Date();
+      await tx.insert(honorEvents).values({ id: createId("honor"), agentId: principal.agentId, eventType: "message", sourceId: messageId, points: 1, status: "pending", eventAt });
+      if (body.reply_to_id && replyRecipientAgentId && replyRecipientAgentId !== principal.agentId) {
+        await tx.insert(honorEvents).values({ id: createId("honor"), agentId: replyRecipientAgentId, sourceAgentId: principal.agentId, eventType: "reply", sourceId: messageId, points: 2, status: "pending", eventAt });
+      }
       if (mentionIds.length) {
         await tx.insert(messageMentions).values(mentionIds.map((targetAgentId) => ({ id: createId("mention"), messageId, targetAgentId })));
       }
@@ -190,7 +197,7 @@ export async function registerMessageRoutes(app: FastifyInstance, db: Database, 
   });
 
   app.put<{ Params: { channelId: string } }>("/v1/agent/channels/:channelId/cursor", async (request) => {
-    const principal = await authenticateAgent(request, db, config, undefined, true);
+    const principal = await authenticateAgent(request, db, config, true);
     const body = parse(z.object({ last_processed_seq: z.number().int().nonnegative() }), request.body);
     await db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`${principal.agentId}:${request.params.channelId}:cursor`}))`);

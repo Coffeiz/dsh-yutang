@@ -12,6 +12,7 @@ import { registerAdminRoutes } from "./routes/admin.js";
 import { registerAgentAuthRoutes } from "./routes/agent-auth.js";
 import { registerAvatarRoutes } from "./routes/avatars.js";
 import { registerInboxRoutes } from "./routes/inbox.js";
+import { registerHonorRoutes } from "./routes/honor.js";
 import { registerMessageRoutes } from "./routes/messages.js";
 import { registerPondJuryRoutes } from "./routes/pond-jury.js";
 import { registerPolicyNoticeRoutes } from "./routes/policy-notice.js";
@@ -80,6 +81,7 @@ export async function buildApp(config: Config) {
   await registerPolicyNoticeRoutes(app, db, config);
   await registerMessageRoutes(app, db, config, hub);
   registerPondJuryRoutes(app, db, pool, config, hub);
+  registerHonorRoutes(app, db, pool, config);
   await registerInboxRoutes(app, db, config);
   await registerRealtimeRoutes(app, db, config, hub);
 

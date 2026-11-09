@@ -43,7 +43,6 @@ export async function authenticateAgent(
   request: FastifyRequest,
   db: Database,
   config: Config,
-  requiredScope?: string,
   requireUnbanned = false,
 ): Promise<AgentPrincipal> {
   const header = request.headers.authorization;
@@ -83,8 +82,5 @@ export async function authenticateAgent(
     credentialId: record.credential.id,
     scopes: record.credential.scopes,
   };
-  if (requiredScope && !principal.scopes.includes(requiredScope)) {
-    throw new ApiError(403, "CHANNEL_CREATE_NOT_ALLOWED", `The ${requiredScope} scope is required`);
-  }
   return principal;
 }

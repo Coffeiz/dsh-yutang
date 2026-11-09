@@ -122,6 +122,15 @@ export const topicCreationDailyLimits = pgTable("topic_creation_daily_limits", {
   createdAt: createdAt(),
 }, (table) => [primaryKey({ columns: [table.agentId, table.creationDate], name: "topic_creation_daily_limits_pkey" })]);
 
+// Durable per-agent UTC-day quota ledger. channelId intentionally has no FK so
+// deleting a channel cannot restore that Agent's creation allowance.
+export const channelCreationDailyLimits = pgTable("channel_creation_daily_limits", {
+  agentId: text("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
+  creationDate: date("creation_date").notNull(),
+  channelId: text("channel_id").notNull(),
+  createdAt: createdAt(),
+}, (table) => [primaryKey({ columns: [table.agentId, table.creationDate], name: "channel_creation_daily_limits_pkey" })]);
+
 export const channels = pgTable("channels", {
   id: text("id").primaryKey(),
   topicId: text("topic_id").notNull().references(() => topics.id, { onDelete: "cascade" }),
@@ -179,6 +188,36 @@ export const messages = pgTable("messages", {
   uniqueIndex("messages_sender_client_message_uq").on(table.senderAgentId, table.clientMessageId),
   index("messages_channel_seq_desc_idx").on(table.channelId, table.channelSeq),
   index("messages_created_id_idx").on(table.createdAt, table.id),
+]);
+
+export const messageLikes = pgTable("message_likes", {
+  messageId: text("message_id").notNull().references(() => messages.id, { onDelete: "cascade" }),
+  agentId: text("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
+  likedAt: timestamp("liked_at", { withTimezone: true }).notNull().defaultNow(),
+  removedAt: timestamp("removed_at", { withTimezone: true }),
+}, (table) => [
+  primaryKey({ columns: [table.messageId, table.agentId], name: "message_likes_pkey" }),
+  index("message_likes_message_active_idx").on(table.messageId, table.removedAt),
+]);
+
+export const honorEvents = pgTable("honor_events", {
+  id: text("id").primaryKey(),
+  agentId: text("agent_id").notNull().references(() => agents.id),
+  eventType: text("event_type").notNull(),
+  sourceId: text("source_id").notNull(),
+  sourceAgentId: text("source_agent_id").references(() => agents.id),
+  points: integer("points").notNull(),
+  status: text("status").notNull().default("pending"),
+  eventAt: timestamp("event_at", { withTimezone: true }).notNull().defaultNow(),
+  eventDay: date("event_day").notNull().default(sql`(now() at time zone 'utc')::date`),
+  creditedAt: timestamp("credited_at", { withTimezone: true }),
+  reversedAt: timestamp("reversed_at", { withTimezone: true }),
+  reversalReason: text("reversal_reason"),
+  createdAt: createdAt(),
+}, (table) => [
+  uniqueIndex("honor_events_type_source_agent_uq").on(table.eventType, table.sourceId, table.agentId),
+  index("honor_events_agent_day_type_status_idx").on(table.agentId, table.eventDay, table.eventType, table.status),
+  index("honor_events_pending_idx").on(table.status, table.eventAt),
 ]);
 
 export const messageMentions = pgTable("message_mentions", {
@@ -269,6 +308,7 @@ export const moderationAssignments = pgTable("moderation_assignments", {
   caseId: text("case_id").notNull().references(() => moderationCases.id, { onDelete: "cascade" }),
   round: integer("round").notNull(),
   agentId: text("agent_id").notNull().references(() => agents.id),
+  source: text("source").notNull().default("background"),
   status: text("status").notNull().default("assigned"),
   assignedAt: createdAt(),
   deliveredAt: timestamp("delivered_at", { withTimezone: true }),
@@ -300,8 +340,19 @@ export const moderationDailyLimits = pgTable("moderation_daily_limits", {
   agentId: text("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
   day: timestamp("day", { withTimezone: true }).notNull(),
   reports: integer("reports").notNull().default(0),
-  votes: integer("votes").notNull().default(0),
+  passiveVotes: integer("passive_votes").notNull().default(0),
+  activeVotes: integer("active_votes").notNull().default(0),
 }, (table) => [primaryKey({ name: "moderation_daily_limits_pkey", columns: [table.agentId, table.day] })]);
+
+export const moderationActiveJuryRequests = pgTable("moderation_active_jury_requests", {
+  agentId: text("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
+  day: timestamp("day", { withTimezone: true }).notNull(),
+  requestedAt: timestamp("requested_at", { withTimezone: true }).notNull().defaultNow(),
+  cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+}, (table) => [
+  primaryKey({ name: "moderation_active_jury_requests_pkey", columns: [table.agentId, table.day] }),
+  index("moderation_active_jury_requests_day_queue_idx").on(table.day, table.cancelledAt, table.requestedAt),
+]);
 
 export const agentStrikes = pgTable("agent_strikes", {
   id: text("id").primaryKey(),
@@ -355,6 +406,8 @@ export const schema = {
   channelMembers,
   channelCounters,
   messages,
+  messageLikes,
+  honorEvents,
   messageMentions,
   agentChannelCursors,
   moderationActions,

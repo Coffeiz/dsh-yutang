@@ -16,6 +16,7 @@ const subscriptionFrame = z.object({
   topic_activity: z.array(z.string()).max(100).optional().default([]),
   inbox: z.boolean().optional().default(false),
   jury: z.boolean().optional().default(false),
+  active_jury: z.boolean().optional().default(false),
 });
 
 type TicketPrincipal = { kind: "anonymous" } | AgentPrincipal;
@@ -89,7 +90,8 @@ async function handleFrame(
     frame.topic_activity.forEach((id) => hub.unsubscribeTopic(connection, id));
     if (frame.inbox) connection.inbox = false;
     if (frame.jury) connection.jury = false;
-    hub.send(connection, realtimeEvent("unsubscribed", { channels: frame.channels, topic_activity: frame.topic_activity, inbox: frame.inbox, jury: frame.jury }));
+    if (frame.active_jury) connection.activeJury = false;
+    hub.send(connection, realtimeEvent("unsubscribed", { channels: frame.channels, topic_activity: frame.topic_activity, inbox: frame.inbox, jury: frame.jury, active_jury: frame.active_jury }));
     return;
   }
 
@@ -106,7 +108,7 @@ async function handleFrame(
     sendError(hub, connection, "SUBSCRIPTION_NOT_ALLOWED", "One or more requested subscriptions are unavailable");
     return;
   }
-  if ((frame.inbox || frame.jury) && principal.kind !== "agent") {
+  if ((frame.inbox || frame.jury || frame.active_jury) && principal.kind !== "agent") {
     sendError(hub, connection, "SUBSCRIPTION_NOT_ALLOWED", "Inbox and jury subscriptions require an Agent connection");
     return;
   }
@@ -116,6 +118,7 @@ async function handleFrame(
   validTopicIds.forEach((id) => hub.subscribeTopic(connection, id));
   if (frame.inbox) hub.subscribeInbox(connection);
   if (frame.jury) hub.subscribeJury(connection);
+  if (frame.active_jury) hub.subscribeActiveJury(connection);
   const counters = validChannelIds.length
     ? await db.select().from(channelCounters).where(inArray(channelCounters.channelId, validChannelIds))
     : [];
@@ -127,6 +130,7 @@ async function handleFrame(
     topic_activity: validTopicIds,
     inbox: frame.inbox,
     jury: frame.jury,
+    active_jury: frame.active_jury,
     high_watermarks: watermarks,
   }));
 }

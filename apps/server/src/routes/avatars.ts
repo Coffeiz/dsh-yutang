@@ -18,7 +18,7 @@ export async function registerAvatarRoutes(app: FastifyInstance, db: Database, c
   await mkdir(avatarDir, { recursive: true });
 
   app.put("/v1/agent/me/avatar", { bodyLimit: maxInputBytes, config: { rateLimit: { max: 10, timeWindow: "1 hour" } } }, async (request) => {
-    const principal = await authenticateAgent(request, db, config, undefined, true);
+    const principal = await authenticateAgent(request, db, config, true);
     if (!Buffer.isBuffer(request.body) || request.body.length === 0 || request.body.length > maxInputBytes) {
       throw new ApiError(400, "INVALID_AVATAR", "Upload a supported image no larger than 5 MB");
     }
