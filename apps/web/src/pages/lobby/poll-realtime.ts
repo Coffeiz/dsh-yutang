@@ -18,6 +18,17 @@ export function pollRealtimeUpdate(type: string, data: unknown, channelId: strin
   return { refresh: true };
 }
 
-export function shouldMarkPollsUnread(type: string, activeTab: 'members' | 'polls') {
-  return type === 'channel.poll.created' && activeTab !== 'polls';
+export function shouldMarkPollsUnread(type: string, activeTab: 'members' | 'polls', sidebarVisible: boolean) {
+  return type === 'channel.poll.created' && (activeTab !== 'polls' || !sidebarVisible);
+}
+
+export function shouldClearPollsUnread(activeTab: 'members' | 'polls', sidebarVisible: boolean) {
+  return activeTab === 'polls' && sidebarVisible;
+}
+
+export function reconcileHiddenPollAfterSync(
+  hiddenPoll: { channelId: string; pollId: string } | null,
+  syncedChannelId: string,
+) {
+  return hiddenPoll?.channelId === syncedChannelId ? null : hiddenPoll;
 }

@@ -3,7 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { VirtualTopicGrid } from '../components/VirtualTopicGrid';
 import { ChatMessage, dayLabel, HelpPage, Icon, mergeMessages } from './lobby/Presentation';
 import { ActivitySidebar, ChannelSidebar } from './lobby/LobbySidebars';
-import { pollRealtimeUpdate, shouldMarkPollsUnread } from './lobby/poll-realtime';
+import { pollRealtimeUpdate, reconcileHiddenPollAfterSync, shouldClearPollsUnread, shouldMarkPollsUnread } from './lobby/poll-realtime';
 import { useDelayedFlag, useDelayedRealtimeState, type RealtimeState } from './lobby/useDelayedStatus';
 import { LeaderboardPage } from './LeaderboardPage';
 import { channelHeaderTitle, latestRecentChannels } from '../navigation-history.js';
@@ -85,7 +85,7 @@ function App() {
   const activityTabRef = useRef(activityTab);
   const [unreadPollChannelIds, setUnreadPollChannelIds] = useState<Set<string>>(() => new Set());
   const [pollsRefresh, setPollsRefresh] = useState(0);
-  const [hiddenPollId, setHiddenPollId] = useState<string | null>(null);
+  const [hiddenPoll, setHiddenPoll] = useState<{ channelId: string; pollId: string } | null>(null);
   const [realtimeState, setRealtimeState] = useState<RealtimeState>('idle');
   const [showChannels, setShowChannels] = useState(false);
   const [showMembers, setShowMembers] = useState(false);
@@ -108,6 +108,7 @@ function App() {
   const recentChannelsIdentity = recentChannelRefs.map(item => item.channelId).join('|');
   const showRecentChannelsLoading = useDelayedFlag(recentChannelsState === 'loading', LOADING_FEEDBACK_DELAY_MS, `${view}:${recentChannelsIdentity}`);
   const visibleRealtimeState = useDelayedRealtimeState(realtimeState);
+  const activitySidebarVisible = Boolean(selectedChannel && !showHelp && (isMobileViewport ? showMembers : !activitySidebarCollapsed));
   const topicSearchRef = useRef<HTMLInputElement>(null);
   const channelSearchRef = useRef<HTMLInputElement>(null);
   const messageSearchRef = useRef<HTMLInputElement>(null);
@@ -115,6 +116,29 @@ function App() {
   const discoveryScrollRef = useRef<HTMLDivElement>(null);
   const latestSeqRef = useRef(0);
   const nearBottomRef = useRef(true);
+  const activitySidebarVisibleRef = useRef(activitySidebarVisible);
+
+  const clearChannelPollUnread = useCallback((channelId: string) => {
+    setUnreadPollChannelIds(current => {
+      if (!current.has(channelId)) return current;
+      const next = new Set(current);
+      next.delete(channelId);
+      return next;
+    });
+  }, []);
+
+  const reconcileHiddenPollsAfterLoad = useCallback((channelId: string) => {
+    setHiddenPoll(current => reconcileHiddenPollAfterSync(current, channelId));
+  }, []);
+
+  useLayoutEffect(() => {
+    activitySidebarVisibleRef.current = activitySidebarVisible;
+  }, [activitySidebarVisible]);
+
+  useEffect(() => {
+    if (!displayChannel || !shouldClearPollsUnread(activityTab, activitySidebarVisible)) return;
+    clearChannelPollUnread(displayChannel.id);
+  }, [activityTab, activitySidebarVisible, clearChannelPollUnread, displayChannel?.id]);
   const initialScrollChannelRef = useRef<string | null>(null);
   const topicQueryRef = useRef(topicQuery);
   const baseTopicPageRef = useRef({ cursor: null as string | null, hasMore: false });
@@ -699,11 +723,15 @@ function App() {
           }
           const pollUpdate = pollRealtimeUpdate(frame.type, frame.data, displayChannel.id);
           if (pollUpdate) {
-            if (shouldMarkPollsUnread(frame.type, activityTabRef.current)) {
+            if (shouldMarkPollsUnread(frame.type, activityTabRef.current, activitySidebarVisibleRef.current)) {
               setUnreadPollChannelIds(current => new Set(current).add(displayChannel.id));
             }
-            if ('hiddenPollId' in pollUpdate && typeof pollUpdate.hiddenPollId === 'string') setHiddenPollId(pollUpdate.hiddenPollId);
-            if ('restoredPollId' in pollUpdate && typeof pollUpdate.restoredPollId === 'string') setHiddenPollId(current => current === pollUpdate.restoredPollId ? null : current);
+            if ('hiddenPollId' in pollUpdate && typeof pollUpdate.hiddenPollId === 'string') {
+              setHiddenPoll({ channelId: displayChannel.id, pollId: pollUpdate.hiddenPollId });
+            }
+            if ('restoredPollId' in pollUpdate && typeof pollUpdate.restoredPollId === 'string') {
+              setHiddenPoll(current => current?.channelId === displayChannel.id && current.pollId === pollUpdate.restoredPollId ? null : current);
+            }
             setPollsRefresh(value => value + 1);
             return;
           }
@@ -1164,19 +1192,14 @@ function App() {
         membersState={membersState}
         membersLoading={showMembersLoading}
         pollsRefresh={pollsRefresh}
-        hiddenPollId={hiddenPollId}
+        hiddenPollId={hiddenPoll && hiddenPoll.channelId === displayChannel?.id ? hiddenPoll.pollId : null}
         pollsUnread={Boolean(displayChannel && unreadPollChannelIds.has(displayChannel.id))}
+        onAuthoritativePollsLoad={reconcileHiddenPollsAfterLoad}
         onClose={() => setShowMembers(false)}
         onTabChange={tab => {
           activityTabRef.current = tab;
           setActivityTab(tab);
-          if (tab === 'polls' && displayChannel) {
-            setUnreadPollChannelIds(current => {
-              const next = new Set(current);
-              next.delete(displayChannel.id);
-              return next;
-            });
-          }
+          if (tab === 'polls' && displayChannel && activitySidebarVisible) clearChannelPollUnread(displayChannel.id);
           try { window.localStorage.setItem('dsh-yutang:activity-tab:v1', tab); } catch { /* Storage is optional. */ }
         }}
       />

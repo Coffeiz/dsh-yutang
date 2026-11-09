@@ -3,7 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { listChannelPolls, type ChannelPoll } from '../api';
 import { createRequestGeneration } from './request-generation';
 
-type Props = { channelId: string; refreshKey?: number; hiddenPollId?: string | null };
+type Props = { channelId: string; refreshKey?: number; hiddenPollId?: string | null; onAuthoritativeLoad?: (channelId: string) => void };
 type LoadState = 'loading' | 'ready' | 'error';
 type PollRow = { kind: 'summary' } | { kind: 'poll'; poll: ChannelPoll } | { kind: 'day'; key: string; label: string; count: number; expanded: boolean };
 
@@ -26,7 +26,7 @@ function remaining(endsAt: string) {
   return `剩余 ${Math.max(1, Math.floor(ms / 60_000))} 分钟`;
 }
 
-export function ChannelPollsPanel({ channelId, refreshKey = 0, hiddenPollId = null }: Props) {
+export function ChannelPollsPanel({ channelId, refreshKey = 0, hiddenPollId = null, onAuthoritativeLoad }: Props) {
   const [active, setActive] = useState<ChannelPoll[]>([]);
   const [closed, setClosed] = useState<ChannelPoll[]>([]);
   const [state, setState] = useState<LoadState>('loading');
@@ -57,12 +57,13 @@ export function ChannelPollsPanel({ channelId, refreshKey = 0, hiddenPollId = nu
       setCursor(closedResult.page.next_cursor ?? null);
       setHasMore(closedResult.page.has_more);
       setState('ready');
+      onAuthoritativeLoad?.(channelId);
     } catch (caught) {
       if (signal?.aborted || !requestGeneration.isCurrent(generation)) return;
       setError(caught instanceof Error ? caught.message : '暂时无法读取投票');
       setState('error');
     }
-  }, [channelId]);
+  }, [channelId, onAuthoritativeLoad]);
 
   useEffect(() => {
     const controller = new AbortController();
