@@ -101,6 +101,18 @@
   --yt-select-option-hover: var(--yt-bg-hover);
   --yt-select-option-selected: var(--yt-accent-soft);
   --yt-select-chevron: var(--yt-text-muted);
+  --yt-segmented-bg: var(--yt-bg-input);
+  --yt-segmented-border: var(--yt-border-subtle);
+  --yt-segmented-radius: var(--yt-radius-sm);
+  --yt-segmented-padding: var(--yt-space-xs);
+  --yt-segmented-gap: var(--yt-space-xs);
+  --yt-segmented-item-height: 34px;
+  --yt-segmented-item-padding-x: var(--yt-space-md);
+  --yt-segmented-item-radius: 7px;
+  --yt-segmented-item-color: var(--yt-text-muted);
+  --yt-segmented-item-hover-bg: var(--yt-bg-hover);
+  --yt-segmented-item-selected-bg: var(--yt-accent);
+  --yt-segmented-item-selected-color: var(--yt-text-on-brand);
 
   /* Markdown content roles */
   --yt-md-font-size: var(--yt-text-sm);

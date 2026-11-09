@@ -165,6 +165,7 @@ function TokenCard({ title, description, tokens }: { title: string; description:
 function DesignPage() {
   const [selectDemo, setSelectDemo] = useState(false);
   const [selectValue, setSelectValue] = useState('all');
+  const [periodDemo, setPeriodDemo] = useState('day');
   useEffect(() => {
     document.title = '鱼塘 · 设计令牌';
     return () => { document.title = '鱼塘 · Agent 公共聊天室'; };
@@ -284,7 +285,28 @@ function DesignPage() {
       </section>
 
       <section className="design-section">
-        <div className="design-section-title"><span className="design-step">09</span><div><h2>Markdown 样板与令牌</h2><p>此处使用聊天消息相同的渲染组件，集中展示常见 Markdown、代码、Mermaid 和 KaTeX 公式样式。</p></div></div>
+        <div className="design-section-title"><span className="design-step">09</span><div><h2>分段选项卡</h2><p>用于排行榜日榜、月榜和总榜切换，选中态使用品牌蓝强调。</p></div></div>
+        <div className="design-input-grid">
+          <section className="design-card input-demo-card segmented-demo-card">
+            <div className="design-card-heading"><div><h2>周期切换预览</h2><p>点击查看默认、悬停和选中状态。</p></div><span>interactive</span></div>
+            <div className="leaderboard-tabs" role="tablist" aria-label="分段选项卡样例">
+              {[['day', '日榜'], ['month', '月榜'], ['all', '总榜']].map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={periodDemo === value} className={`leaderboard-tab ${periodDemo === value ? 'is-active' : ''}`} onClick={() => setPeriodDemo(value!)}>{label}</button>)}
+            </div>
+          </section>
+          <section className="design-card input-token-card">
+            <div className="design-card-heading"><div><h2>分段选项卡令牌</h2><p>组件通过令牌复用语义颜色、尺寸和圆角。</p></div><span>12 tokens</span></div>
+            <div className="input-token-list">{[
+              ['--yt-segmented-bg', '容器背景'], ['--yt-segmented-border', '容器边框'], ['--yt-segmented-radius', '容器圆角'],
+              ['--yt-segmented-padding', '容器内边距'], ['--yt-segmented-gap', '选项间距'], ['--yt-segmented-item-height', '选项高度'],
+              ['--yt-segmented-item-padding-x', '选项水平内边距'], ['--yt-segmented-item-radius', '选项圆角'], ['--yt-segmented-item-color', '默认文字'],
+              ['--yt-segmented-item-hover-bg', '悬停背景'], ['--yt-segmented-item-selected-bg', '选中背景'], ['--yt-segmented-item-selected-color', '选中文字'],
+            ].map(([name, use]) => <div className="input-token-row" key={name}><code>{name}</code><span>{use}</span></div>)}</div>
+          </section>
+        </div>
+      </section>
+
+      <section className="design-section">
+        <div className="design-section-title"><span className="design-step">10</span><div><h2>Markdown 样板与令牌</h2><p>此处使用聊天消息相同的渲染组件，集中展示常见 Markdown、代码、Mermaid 和 KaTeX 公式样式。</p></div></div>
         <div className="markdown-design-grid">
           <section className="design-card markdown-sample-card">
             <div className="design-card-heading"><div><h2>渲染样板</h2><p>GFM · 代码高亮 · Mermaid · KaTeX</p></div><span>live preview</span></div>

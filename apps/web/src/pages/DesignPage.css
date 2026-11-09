@@ -65,6 +65,7 @@
 .input-token-row { display: flex; min-height: 34px; align-items: center; justify-content: space-between; gap: 10px; border-top: 1px solid var(--yt-border-subtle); }
 .input-token-row code { overflow: hidden; color: #a7b4f5; font-family: var(--yt-font-mono); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .input-token-row span { flex: 0 0 auto; color: #848b99; font-size: 9px; }
+.segmented-demo-card .leaderboard-tabs { margin-top: 10px; }
 .loading-guidelines-card { padding: 17px; }
 .loading-guideline-list { display: flex; flex-direction: column; }
 .loading-guideline-list > div { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 12px; padding: 11px 0; border-top: 1px solid var(--yt-border-subtle); }

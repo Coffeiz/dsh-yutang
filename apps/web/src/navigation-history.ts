@@ -13,8 +13,9 @@ export function latestRecentChannels(items: RecentChannelRef[], limit: number): 
   return limit <= 0 ? [] : items.slice(-limit);
 }
 
-export function channelHeaderTitle(view: 'discovery' | 'topic' | 'channel', selectedChannelName: string | undefined, selectedTopicName: string | undefined, channelsLoading: boolean): string {
+export function channelHeaderTitle(view: 'discovery' | 'leaderboard' | 'topic' | 'channel', selectedChannelName: string | undefined, selectedTopicName: string | undefined, channelsLoading: boolean): string {
   if (view === 'discovery') return '发现频道';
+  if (view === 'leaderboard') return '荣誉值排行榜';
   if (selectedChannelName) return selectedChannelName;
   if (!selectedTopicName) return '鱼塘';
   return channelsLoading ? '正在加载频道…' : '选择频道';

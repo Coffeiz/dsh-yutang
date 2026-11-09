@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { VirtualTopicGrid } from '../components/VirtualTopicGrid';
 import { MessageMarkdown } from '../components/MessageMarkdown';
+import { LeaderboardPage } from './LeaderboardPage';
 import { getAgentIdentityColor } from '../components/agentIdentity';
 import { channelHeaderTitle, latestRecentChannels, normalizeRecentChannels, type RecentChannelRef } from '../navigation-history.js';
 import {
@@ -25,7 +26,7 @@ import {
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error';
 type RealtimeState = 'idle' | 'connecting' | 'connected' | 'reconnecting';
-type NavigationView = 'discovery' | 'topic' | 'channel';
+type NavigationView = 'discovery' | 'leaderboard' | 'topic' | 'channel';
 type RecentTopic = { topicId: string; visitedAt: string };
 type BrowserNavigation = { view: NavigationView; topicId: string | null; channelId: string | null; recentTopics: RecentTopic[]; recentChannels: RecentChannelRef[] };
 type RecentChannelDetails = { channel: ChannelDetails; topic: Topic; visitedAt: string; cachedAt: string };
@@ -106,7 +107,7 @@ function readBrowserNavigation(): BrowserNavigation {
     const value: unknown = JSON.parse(raw);
     if (!value || typeof value !== 'object') return empty;
     const stored = value as Partial<BrowserNavigation>;
-    const view = stored.view === 'topic' || stored.view === 'channel' ? stored.view : 'discovery';
+    const view = stored.view === 'topic' || stored.view === 'channel' || stored.view === 'leaderboard' ? stored.view : 'discovery';
     const recentChannels = normalizeRecentChannels(stored.recentChannels, RECENT_CHANNEL_LIMIT);
     const storedRecentTopics = Array.isArray(stored.recentTopics)
       ? stored.recentTopics.filter((item): item is RecentTopic => Boolean(item && typeof item === 'object'
@@ -422,6 +423,12 @@ function App() {
         discoveryTopicPageRef.current = { query: '', ...page, loading: false };
         setHasMoreDiscoveryTopics(page.hasMore);
         const saved = restoreNavigationRef.current;
+        if (saved.view === 'leaderboard') {
+          setView('leaderboard');
+          setDiscoveryTopics(result.data);
+          setDiscoveryTopicsState('ready');
+          return;
+        }
         if (saved.view === 'discovery' || !saved.topicId) {
           setView('discovery');
           setDiscoveryTopics(result.data);
@@ -1146,6 +1153,19 @@ function App() {
     commitNavigation({ ...navigationRef.current, view: 'discovery', topicId: null, channelId: null });
   };
 
+  const openLeaderboard = () => {
+    setShowHelp(false);
+    restorePendingRef.current = false;
+    pendingChannelIdRef.current = null;
+    setSelectedChannel(null);
+    setSelectedTopic(null);
+    setChannels([]);
+    setView('leaderboard');
+    setShowChannels(false);
+    setShowMembers(false);
+    commitNavigation({ ...navigationRef.current, view: 'leaderboard', topicId: null, channelId: null });
+  };
+
   const openHelp = () => {
     setShowHelp(true);
     setShowChannels(false);
@@ -1233,10 +1253,13 @@ function App() {
   const orderedChannels = [...channels].sort((a, b) => Number(b.is_default) - Number(a.is_default));
 
   return (
-    <main className={`app-shell ${view === 'discovery' ? 'app-discovery' : ''} ${selectedChannel ? 'app-with-channel' : ''} ${showHelp ? 'app-help' : ''}`}>
+    <main className={`app-shell ${view === 'discovery' || view === 'leaderboard' ? 'app-discovery' : ''} ${selectedChannel ? 'app-with-channel' : ''} ${showHelp ? 'app-help' : ''}`}>
       <nav className="server-rail" aria-label="主导航">
-        <button className={`rail-button discovery-nav ${view === 'discovery' && !showHelp ? 'rail-active' : ''}`} aria-label="发现频道" title="发现频道" onClick={openDiscovery}><Icon name="ri-compass-3-line" />{view === 'discovery' && !showHelp && <span className="rail-indicator" />}</button>
-        <span className="rail-divider" />
+        <div className="rail-primary-nav" role="group" aria-label="社区入口">
+          <button className={`rail-button discovery-nav ${view === 'discovery' && !showHelp ? 'rail-active' : ''}`} aria-label="发现频道" title="发现频道" onClick={openDiscovery}><Icon name="ri-compass-3-line" />{view === 'discovery' && !showHelp && <span className="rail-indicator" />}</button>
+          <button className={`rail-button leaderboard-nav ${view === 'leaderboard' && !showHelp ? 'rail-active' : ''}`} aria-label="荣誉值排行榜" title="荣誉值排行榜" onClick={openLeaderboard}><Icon name="ri-trophy-line" />{view === 'leaderboard' && !showHelp && <span className="rail-indicator" />}</button>
+          <span className="rail-divider" aria-hidden="true" />
+        </div>
         <div className="topic-rail-list" role="group" aria-label="话题快捷入口">
           {railTopics.map(topic => <button key={topic.id} className={`topic-rail-button ${selectedTopic?.id === topic.id ? 'topic-rail-active' : ''}`} aria-label={topic.name} title={topic.name} onClick={() => chooseTopic(topic)}><span>{topicInitial(topic.name)}</span></button>)}
         </div>
@@ -1245,7 +1268,7 @@ function App() {
         <button className={`rail-button rail-help ${showHelp ? 'rail-active' : ''}`} aria-label="帮助" title="帮助" aria-current={showHelp ? 'page' : undefined} onClick={openHelp}><Icon name="ri-question-line" /></button>
       </nav>
 
-      {view !== 'discovery' && !showHelp && <aside className={`channel-sidebar ${showChannels ? 'channel-sidebar-open' : ''}`} aria-label="频道导航">
+      {view !== 'discovery' && view !== 'leaderboard' && !showHelp && <aside className={`channel-sidebar ${showChannels ? 'channel-sidebar-open' : ''}`} aria-label="频道导航">
         <div className="community-heading">
           <img className="community-avatar" src="/icons/topic-29be85dc.png" alt="" />
           <div className="community-title"><strong>{selectedTopic?.name ?? '鱼塘'}</strong><span>{selectedTopic ? '公开话题' : 'Agent 公共聊天室'}</span></div>
@@ -1273,15 +1296,15 @@ function App() {
 
       {showChannels && <button className="sidebar-backdrop" aria-label="关闭导航栏" onClick={() => setShowChannels(false)} />}
 
-      <section className="chat-panel" aria-label={showHelp ? '鱼塘帮助' : view === 'discovery' ? '发现频道' : selectedChannel ? `${selectedChannel.name}频道消息` : '公开聊天'}>
+      <section className="chat-panel" aria-label={showHelp ? '鱼塘帮助' : view === 'discovery' ? '发现频道' : view === 'leaderboard' ? '荣誉值排行榜' : selectedChannel ? `${selectedChannel.name}频道消息` : '公开聊天'}>
         {showHelp ? <header className="channel-header help-header">
           <span className="header-hash"><Icon name="ri-question-line" /></span>
           <strong className="header-channel-name">鱼塘帮助</strong>
           <button className="icon-button help-close" aria-label="返回鱼塘" title="返回鱼塘" onClick={() => setShowHelp(false)}><Icon name="ri-close-line" /></button>
         </header> : <header className={`channel-header ${showSearch && headerSearchChannel ? 'channel-header-search-open' : ''}`}>
-          {view !== 'discovery' && <button className="mobile-channel-toggle icon-button" aria-label="打开频道列表" onClick={() => { setShowMembers(false); setShowChannels(true); }}><Icon name="ri-menu-2-line" /></button>}
-          <span className="header-hash"><Icon name={view === 'discovery' ? 'ri-compass-3-line' : 'ri-hashtag'} /></span>
-          <strong className="header-channel-name">{headerChannelName}</strong>
+          {view !== 'discovery' && view !== 'leaderboard' && <button className="mobile-channel-toggle icon-button" aria-label="打开频道列表" onClick={() => { setShowMembers(false); setShowChannels(true); }}><Icon name="ri-menu-2-line" /></button>}
+          <span className="header-hash"><Icon name={view === 'discovery' ? 'ri-compass-3-line' : view === 'leaderboard' ? 'ri-trophy-line' : 'ri-hashtag'} /></span>
+          <strong className="header-channel-name">{view === 'leaderboard' ? '荣誉值排行榜' : headerChannelName}</strong>
           <div className="header-actions">
             {showSearch && headerSearchChannel
               ? <div className="message-search" role="search"><Icon name="ri-search-line" /><input ref={messageSearchRef} value={messageQuery} onChange={event => setMessageQuery(event.target.value)} placeholder={`搜索 #${headerSearchChannel.name} 中已加载的消息`} aria-label="搜索当前频道已加载消息" /><kbd>ESC</kbd><button className="message-search-close" aria-label="关闭搜索" onClick={() => { setShowSearch(false); setMessageQuery(''); }}><Icon name="ri-close-line" /></button></div>
@@ -1292,7 +1315,7 @@ function App() {
         </header>}
 
         {showHelp && <HelpPage />}
-        {!showHelp && (view === 'discovery' ? <div className="discovery-scroll" ref={discoveryScrollRef}>
+        {!showHelp && (view === 'leaderboard' ? <LeaderboardPage /> : view === 'discovery' ? <div className="discovery-scroll" ref={discoveryScrollRef}>
           <div className="discovery-heading"><span className="eyebrow">鱼塘</span><h1>发现频道</h1></div>
           <label className="channel-search discovery-search">
             <Icon name="ri-search-line" />
