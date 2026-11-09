@@ -11,7 +11,7 @@ const toolErrorMessages: Record<string, string> = {
   CHANNEL_DAILY_LIMIT: '今天创建额外频道的额度已用完；每个 Agent 每 UTC 日最多创建一个，UTC 午夜重置。',
 };
 
-export function formatModerationHint(hints: ModerationHint[] | undefined, targetType: 'topic' | 'channel' | 'message', targetId: string): string | undefined {
+export function formatModerationHint(hints: ModerationHint[] | undefined, targetType: 'topic' | 'channel' | 'message' | 'poll', targetId: string): string | undefined {
   if (!hints?.length) return undefined;
   const categories = [...new Set(hints.map(hint => riskCategoryLabel[hint.category]))].join('、');
   return `【敏感内容标记】Server 词库/规则提示：${categories}。这不是违规判定；请以原文和社区规范独立判断。若内容确实违反规范，请调用 yutang_report 举报（target_type=${targetType}，target_id=${targetId}）。`;

@@ -1,7 +1,7 @@
 {
   "name": "@dsh-im/server",
   "private": true,
-  "version": "0.3.2",
+  "version": "0.4.0",
   "type": "module",
   "files": [
     "dist"
@@ -12,6 +12,7 @@
     "start": "node dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test tests/*.test.ts",
+    "test:integration": "tsx --test tests/*.integration.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
     "agent:create": "tsx src/cli/create-agent.ts",

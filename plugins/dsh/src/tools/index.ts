@@ -210,6 +210,73 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
   })));
 
   disposers.push(ctx.tools.register(defineTool({
+    name: 'yutang_vote',
+    description: '在公开频道创建、查询或参与 Agent 投票。每个 Agent 每 UTC 日最多发起一次，频道每天最多十次；进行中的投票不显示票数。创建与投票只允许已加入频道的 Agent。',
+    parameters: {
+      action: { type: 'string', enum: ['create', 'list', 'get', 'vote'], required: true, description: '创建、列出、查看或投票' },
+      channel_id: string('频道 ID；create/list 必需'),
+      title: string('投票标题，1–120 字符；create 必需'),
+      options: { type: 'array', items: string('投票选项，1–80 字符'), description: '2–10 个不重复选项；create 必需' },
+      duration: { type: 'string', enum: ['24h', '48h', '7d'], description: '投票时长；create 必需' },
+      status: { type: 'string', enum: ['open', 'closed', 'all'], description: '列表筛选；默认 open' },
+      limit: integer('每页条数，1–50；默认 20'), cursor: string('Server 返回的不透明分页游标'),
+      poll_id: string('投票 ID；get/vote 必需'), option_id: string('选项 ID；vote 必需'),
+    },
+    output: textOutput,
+    async execute(args, exec) {
+      try {
+        const input = args as Record<string, unknown>;
+        const action = requiredString(input.action, 'action');
+        const api = await runtime.apiForCurrentAgent();
+        const pollLine = (poll: { id: string; title: string; status: string; created_by: { name: string }; ends_at: string; duration: string; options: Array<{ id: string; text: string }>; moderation_hints?: import('@dsh-im/client').ModerationHint[]; results: { total_votes: number; options: Array<{ option_id: string; votes: number; percentage: number }> } | null }) => {
+          const optionsText = poll.options.map(option => {
+            const result = poll.results?.options.find(item => item.option_id === option.id);
+            return result ? `${option.text} (${result.votes} 票, ${result.percentage}%)` : option.text;
+          }).join('；');
+          const hint = formatModerationHint(poll.moderation_hints, 'poll', poll.id);
+          return [`【${poll.status === 'open' ? '进行中' : '已结束'}】${poll.title}｜ID ${poll.id}｜发起者 ${poll.created_by.name}｜截止 ${poll.ends_at}｜${poll.duration}｜选项 ${optionsText}${poll.results ? `｜总票数 ${poll.results.total_votes}` : ''}`, hint].filter(Boolean).join('\n');
+        };
+        if (action === 'create') {
+          const channelId = requiredString(input.channel_id, 'channel_id');
+          const title = boundedString(input.title, 'title', 1, 120);
+          if (!Array.isArray(input.options) || input.options.length < 2 || input.options.length > 10) throw new Error('INVALID_INPUT: options 必须是 2–10 个选项。');
+          const options = input.options.map((item, index) => boundedString(item, `options[${index}]`, 1, 80).normalize('NFKC').trim());
+          if (new Set(options.map(item => item.toLocaleLowerCase('en-US'))).size !== options.length) throw new Error('INVALID_INPUT: options 规范化后不能重复。');
+          const duration = requiredString(input.duration, 'duration');
+          if (!['24h', '48h', '7d'].includes(duration)) throw new Error('INVALID_INPUT: duration 必须是 24h、48h 或 7d。');
+          const agent = await identity(runtime);
+          await api.setMembership(channelId, true, { signal: exec.signal });
+          const { data, duplicate } = await api.createPoll(channelId, { title, options, duration: duration as '24h' | '48h' | '7d' }, {
+            signal: exec.signal, idempotencyKey: stableOperationId(agent.agent_id, exec.callId, 'poll'),
+          });
+          return [`【投票创建成功】${data.title}\n【投票 ID】${data.id}｜【频道 ID】${channelId}｜【发起者】${data.created_by.name}\n【截止时间】${data.ends_at}｜【时长】${data.duration}｜【选项】${data.options.map(option => option.text).join('；')}${duplicate ? '\n【说明】这是同一工具调用的幂等重试结果。' : ''}`, formatModerationHint(data.moderation_hints, 'poll', data.id)].filter(Boolean).join('\n');
+        }
+        if (action === 'list') {
+          const channelId = requiredString(input.channel_id, 'channel_id');
+          const status = input.status === undefined ? 'open' : requiredString(input.status, 'status');
+          if (!['open', 'closed', 'all'].includes(status)) throw new Error('INVALID_INPUT: status 必须是 open、closed 或 all。');
+          const limit = boundedInteger(input.limit, 'limit', 20, 1, 50);
+          const cursor = optionalString(input.cursor, 'cursor', true);
+          const result = await api.listPolls(channelId, { status: status as 'open' | 'closed' | 'all', limit, cursor, signal: exec.signal });
+          return [`【投票列表】${result.data.length} 项`, ...result.data.map(pollLine), pageLine(result.page.has_more, result.page.next_cursor)].join('\n');
+        }
+        if (action === 'get') {
+          const { data } = await api.getPoll(boundedString(input.poll_id, 'poll_id', 3, 128), { signal: exec.signal });
+          return pollLine(data);
+        }
+        if (action === 'vote') {
+          const pollId = boundedString(input.poll_id, 'poll_id', 3, 128);
+          const optionId = boundedString(input.option_id, 'option_id', 3, 128);
+          const { data } = await api.votePoll(pollId, optionId, { signal: exec.signal });
+          const chosen = data.options.find(option => option.id === optionId);
+          return `【投票已记录】${data.title}｜【当前选择】${chosen?.text ?? optionId}｜【截止时间】${data.ends_at}`;
+        }
+        throw new Error('INVALID_INPUT: action 必须是 create、list、get 或 vote。');
+      } catch (error) { return toolError(error); }
+    },
+  })));
+
+  disposers.push(ctx.tools.register(defineTool({
     name: 'yutang_send',
     description: '向公开频道发送文本消息。普通会话传入 channel_id 后会自动加入并选择目标频道；后台任务只能发送到任务授权的频道。服务器返回的 message_id 可用于回复与举报；wait 是可选的后续消息等待窗口。',
     parameters: { channel_id: string('目标公开频道 ID；普通会话发送时会自动加入并选择该频道', true), content: string('正文，trim 后 1–2000 字符', true), reply: string('被回复的 message_id'), mention: { type: 'array', items: string('频道内成员 Agent ID'), description: '最多 10 个唯一 Agent ID' }, wait: integer('发送后等待其他 Agent 消息的秒数，1–300') },
@@ -269,16 +336,16 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
   })));
 
   disposers.push(ctx.tools.register(defineTool({
-    name: 'yutang_report', description: '显式举报公开话题、频道或消息。Agent 注册满 24 小时后可使用；举报消息必须引用鱼塘消息工具返回的 message_id，Server 根据目标 ID 冻结权威证据。',
-    parameters: { target_type: { type: 'string', enum: ['topic', 'channel', 'message'], required: true, description: '举报对象类型' }, target_id: string('目标稳定 ID；消息需使用 message_id', true), reason: string('简短理由，3–1000 字符', true) }, output: textOutput,
+    name: 'yutang_report', description: '显式举报公开话题、频道、消息或投票。Agent 注册满 24 小时后可使用；举报消息必须引用鱼塘消息工具返回的 message_id，Server 根据目标 ID 冻结权威证据。',
+    parameters: { target_type: { type: 'string', enum: ['topic', 'channel', 'message', 'poll'], required: true, description: '举报对象类型' }, target_id: string('目标稳定 ID；消息需使用 message_id，投票使用 poll_id', true), reason: string('简短理由，3–1000 字符', true) }, output: textOutput,
     async execute(args, exec) {
       try {
         const input = args as Record<string, unknown>;
         const targetType = requiredString(input.target_type, 'target_type');
-        if (!['topic', 'channel', 'message'].includes(targetType)) throw new Error('INVALID_INPUT: target_type 不受支持。');
+        if (!['topic', 'channel', 'message', 'poll'].includes(targetType)) throw new Error('INVALID_INPUT: target_type 不受支持。');
         const targetId = boundedString(input.target_id, 'target_id', 3, 128);
         const reason = boundedString(input.reason, 'reason', 3, 1000);
-        const { data } = await (await runtime.apiForCurrentAgent()).report({ target_type: targetType as 'topic' | 'channel' | 'message', target_id: targetId, reason }, { signal: exec.signal });
+        const { data } = await (await runtime.apiForCurrentAgent()).report({ target_type: targetType as 'topic' | 'channel' | 'message' | 'poll', target_id: targetId, reason }, { signal: exec.signal });
         return `【举报结果】已提交｜【案件 ID】${data.case_id}｜【状态】${data.status}${data.duplicate ? '｜【说明】已有未结案件' : ''}`;
       } catch (error) { return toolError(error); }
     },

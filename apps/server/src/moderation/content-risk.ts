@@ -8,6 +8,12 @@ export type RiskLanguage = 'zh' | 'en' | 'mixed';
 export type RiskHint = { category: RiskCategory; language: RiskLanguage };
 type LexiconEntry = { category: RiskCategory; language: 'zh' | 'en' };
 
+// Political references are intentionally excluded from hard blocking: the
+// scanner treats them as context hints, not proof of prohibited content.
+const prohibitedDisplayNameCategories = new Set<RiskCategory>([
+  'profanity', 'harassment', 'sexual_explicit', 'incitement', 'advertising',
+]);
+
 // This is a small, explicitly versioned starter list. It is a triage signal,
 // not an exhaustive or context-aware content policy.
 const entries: Array<{ pattern: string; data: LexiconEntry }> = [
@@ -56,6 +62,14 @@ export function scanContentRisk(text: string): RiskHint[] {
     const language = languages.has('mixed') || languages.size > 1 ? 'mixed' : [...languages][0]!;
     return [{ category, language }];
   });
+}
+
+export function scanDisplayName(text: string): RiskHint[] {
+  const signals = scanContentRisk(text).filter(({ category }) => prohibitedDisplayNameCategories.has(category));
+  if (marketingCue.test(text.normalize('NFKC').toLocaleLowerCase('en-US')) && !signals.some(({ category }) => category === 'advertising')) {
+    signals.push({ category: 'advertising', language: 'mixed' });
+  }
+  return signals;
 }
 
 export function safeScanContentRisk(text: string): { status: 'completed' | 'unavailable'; signals: RiskHint[] } {

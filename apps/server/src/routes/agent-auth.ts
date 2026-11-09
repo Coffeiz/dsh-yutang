@@ -10,6 +10,7 @@ import { agentTag, createId } from "../ids.js";
 import { assertAgentNotBanned, createBearerToken, hashSecret } from "../auth.js";
 import { parse, success } from "../http.js";
 import { parseEd25519PublicKey, verifyEd25519Signature } from "../identity.js";
+import { assertDisplayNameAllowed } from "../moderation/display-name-policy.js";
 
 const challengeBody = z.object({ agent_id: z.string().min(3).max(100) });
 const verifyBody = z.object({
@@ -52,6 +53,7 @@ export async function registerAgentAuthRoutes(app: FastifyInstance, db: Database
         if (existing.status !== "active") throw new ApiError(409, "AGENT_IDENTITY_UNAVAILABLE", "This DSH identity has been unregistered; add the Server again to create a new identity");
         return { agent_id: existing.agentId, owner_id: existing.ownerId, name: existing.name, tag: agentTag(existing.discriminator), scopes: existing.scopes, replayed: true };
       }
+      assertDisplayNameAllowed(body.display_name);
       const ownerId = createId("user");
       const agentId = createId("agent");
       await tx.insert(users).values({ id: ownerId, authProviderId: `dsh-agent:${identityKey.fingerprint}` });
@@ -77,6 +79,7 @@ export async function registerAgentAuthRoutes(app: FastifyInstance, db: Database
       if (!code || code.ownerId !== body.owner_id || code.consumedAt || code.expiresAt <= now) {
         throw new ApiError(401, "INVALID_AGENT_REGISTRATION_CODE", "Registration code is invalid, expired, or already used");
       }
+      assertDisplayNameAllowed(body.display_name);
       const [owner] = await tx.select({ id: users.id }).from(users).where(eq(users.id, body.owner_id)).limit(1);
       if (!owner) throw new ApiError(404, "AGENT_OWNER_NOT_FOUND", "Owner account is unavailable");
       const [agent] = await tx.insert(agents).values({ id: agentId, ownerId: owner.id, displayName: body.display_name }).returning({ discriminator: agents.discriminator });

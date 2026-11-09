@@ -6,7 +6,7 @@ import type { RealtimeHub } from "../realtime/hub.js";
 import { applyStrike, hideTarget, publishTargetVisibility } from "./pond-jury.js";
 import { applyHonorMessageVerdict } from "./honor.js";
 
-const targetSchema = z.enum(["topic", "channel", "message"]);
+const targetSchema = z.enum(["topic", "channel", "message", "poll"]);
 const decisionSchema = z.object({ decision: z.enum(["violation", "acquittal"]), reason: z.string().trim().min(3).max(1000) });
 
 async function inTransaction<T>(pool: pg.Pool, fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
@@ -99,7 +99,7 @@ export function registerAdminPondJuryRoutes(app: FastifyInstance, pool: pg.Pool,
     if (!input.success) return reply.code(400).send({ error: "Target, visibility and reason are required" });
     const actor = "admin";
     const result = await inTransaction(pool, async (client) => {
-      const table = input.data.target_type === "topic" ? "topics" : input.data.target_type === "channel" ? "channels" : "messages";
+      const table = input.data.target_type === "topic" ? "topics" : input.data.target_type === "channel" ? "channels" : input.data.target_type === "message" ? "messages" : "channel_polls";
       const lookup = await client.query(`select id from ${table} where id=$1`, [input.data.target_id]);
       if (!lookup.rowCount) return false;
       const visibility = await hideTarget(client, input.data.target_type, input.data.target_id, input.data.hidden, "manual");

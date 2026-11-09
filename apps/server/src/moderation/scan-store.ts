@@ -3,7 +3,7 @@ import type { Database } from '../db/client.js';
 import { moderationScans } from '../db/schema.js';
 import { DETECTOR_VERSION, LEXICON_VERSION, safeScanContentRisk, type RiskHint } from './content-risk.js';
 
-export type ModerationTargetType = 'topic' | 'channel' | 'message';
+export type ModerationTargetType = 'topic' | 'channel' | 'message' | 'poll';
 
 export function moderationScanValues(targetType: ModerationTargetType, targetId: string, text: string) {
   const scan = safeScanContentRisk(text);
