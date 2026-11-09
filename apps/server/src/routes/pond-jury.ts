@@ -203,8 +203,12 @@ export async function hideTarget(client: pg.PoolClient, type: TargetType, id: st
     const item = rows[0];
     if (!item) return null;
     const effectiveHidden = Boolean(item.manual_hidden) || await hasConfirmedViolation(client, type, id);
-    const nextStatus = effectiveHidden ? "hidden" : new Date(item.ends_at) <= new Date() ? "closed" : "open";
-    await client.query("update channel_polls set status=$2 where id=$1", [id, nextStatus]);
+    const expired = new Date(item.ends_at) <= new Date();
+    const nextStatus = effectiveHidden ? "hidden" : item.status === "closed" || expired ? "closed" : "open";
+    await client.query(`update channel_polls set status=$2,
+      closed_at=case when ends_at<=now() then coalesce(closed_at,now()) else closed_at end,
+      closed_reason=case when ends_at<=now() then coalesce(closed_reason,'expired') else closed_reason end
+      where id=$1`, [id, nextStatus]);
     const { rows: channelRows } = await client.query("select topic_id from channels where id=$1", [item.channel_id]);
     return { type, id, hidden: nextStatus === "hidden", channelId: item.channel_id, topicId: channelRows[0]?.topic_id };
   }

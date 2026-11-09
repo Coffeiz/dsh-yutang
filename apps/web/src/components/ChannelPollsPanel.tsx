@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { listChannelPolls, type ChannelPoll } from '../api';
 
-type Props = { channelId: string; refreshKey?: number };
+type Props = { channelId: string; refreshKey?: number; hiddenPollId?: string | null };
 type LoadState = 'loading' | 'ready' | 'error';
 type PollRow = { kind: 'summary' } | { kind: 'poll'; poll: ChannelPoll } | { kind: 'day'; key: string; label: string; count: number; expanded: boolean };
 
@@ -25,7 +25,7 @@ function remaining(endsAt: string) {
   return `剩余 ${Math.max(1, Math.floor(ms / 60_000))} 分钟`;
 }
 
-export function ChannelPollsPanel({ channelId, refreshKey = 0 }: Props) {
+export function ChannelPollsPanel({ channelId, refreshKey = 0, hiddenPollId = null }: Props) {
   const [active, setActive] = useState<ChannelPoll[]>([]);
   const [closed, setClosed] = useState<ChannelPoll[]>([]);
   const [state, setState] = useState<LoadState>('loading');
@@ -76,6 +76,12 @@ export function ChannelPollsPanel({ channelId, refreshKey = 0 }: Props) {
     void loadFirstPage();
   }, [loadFirstPage, refreshKey]);
 
+  useEffect(() => {
+    if (!hiddenPollId) return;
+    setActive(current => current.filter(poll => poll.id !== hiddenPollId));
+    setClosed(current => current.filter(poll => poll.id !== hiddenPollId));
+  }, [hiddenPollId]);
+
   const loadMore = useCallback(async () => {
     if (loadingRef.current || !hasMore || !cursor) return;
     loadingRef.current = true;
@@ -119,10 +125,6 @@ export function ChannelPollsPanel({ channelId, refreshKey = 0 }: Props) {
   });
 
   const virtualItems = virtualizer.getVirtualItems();
-  const lastVirtualIndex = virtualItems.at(-1)?.index ?? -1;
-  useEffect(() => {
-    if (lastVirtualIndex >= rows.length - 4 && hasMore) void loadMore();
-  }, [hasMore, lastVirtualIndex, loadMore, rows.length]);
 
   if (state === 'loading' && !active.length && !closed.length) return <div className="polls-panel-state">正在加载投票…</div>;
   if (state === 'error' && !active.length && !closed.length) return <div className="polls-panel-state"><span>{error || '暂时无法读取投票'}</span><button type="button" onClick={() => void loadFirstPage()}>重试</button></div>;
@@ -143,6 +145,7 @@ export function ChannelPollsPanel({ channelId, refreshKey = 0 }: Props) {
         })}
       </div>
       {loadingMore && <div className="polls-panel-state">正在加载更早的投票…</div>}
+      {hasMore && !loadingMore && <div className="polls-load-more"><button type="button" onClick={() => void loadMore()}>加载更早的投票</button></div>}
       {error && state === 'ready' && <div className="polls-panel-state"><span>{error}</span><button type="button" onClick={() => void loadMore()}>重试</button></div>}
       {state === 'ready' && active.length === 0 && closed.length === 0 && <div className="polls-panel-state">这个频道还没有投票</div>}
     </div>

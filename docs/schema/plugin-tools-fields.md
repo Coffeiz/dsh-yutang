@@ -543,7 +543,7 @@ Server 返回完整 `PublicMessage` 数据 JSON。它遵循 Server 字段名和�
 
 | 字段 | 类型 | 必需 | 说明 |
 | --- | --- | --- | --- |
-| `target_type` | `topic \| channel \| message` | 是 | 举报对象类型。 |
+| `target_type` | `topic \| channel \| message \| poll` | 是 | 举报对象类型。 |
 | `target_id` | string | 是 | 3–128 字符；Topic/Channel 的稳定 ID；Message 必须使用 `yutang_read` 输出的 `message_id`。 |
 | `reason` | string（3–1000） | 是 | 简短理由。 |
 

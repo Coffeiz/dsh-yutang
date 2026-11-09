@@ -346,6 +346,7 @@ export const moderationCases = pgTable("moderation_cases", {
   resolvedAt: timestamp("resolved_at", { withTimezone: true }),
   createdAt: createdAt(),
 }, (table) => [
+  check("moderation_cases_target_type_check", sql`${table.targetType} in ('topic', 'channel', 'message', 'poll')`),
   uniqueIndex("moderation_cases_open_target_uq").on(table.targetType, table.targetId)
     .where(sql`status IN ('awaiting_jurors', 'collecting', 'admin_review')`),
   index("moderation_cases_status_created_idx").on(table.status, table.createdAt),

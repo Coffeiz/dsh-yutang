@@ -3,6 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { VirtualTopicGrid } from '../components/VirtualTopicGrid';
 import { ChatMessage, dayLabel, HelpPage, Icon, mergeMessages } from './lobby/Presentation';
 import { ActivitySidebar, ChannelSidebar } from './lobby/LobbySidebars';
+import { pollRealtimeUpdate } from './lobby/poll-realtime';
 import { useDelayedFlag, useDelayedRealtimeState, type RealtimeState } from './lobby/useDelayedStatus';
 import { LeaderboardPage } from './LeaderboardPage';
 import { channelHeaderTitle, latestRecentChannels } from '../navigation-history.js';
@@ -82,6 +83,7 @@ function App() {
     try { return window.localStorage.getItem('dsh-yutang:activity-tab:v1') === 'polls' ? 'polls' : 'members'; } catch { return 'members'; }
   });
   const [pollsRefresh, setPollsRefresh] = useState(0);
+  const [hiddenPollId, setHiddenPollId] = useState<string | null>(null);
   const [realtimeState, setRealtimeState] = useState<RealtimeState>('idle');
   const [showChannels, setShowChannels] = useState(false);
   const [showMembers, setShowMembers] = useState(false);
@@ -693,9 +695,11 @@ function App() {
             }).catch(() => {});
             return;
           }
-          if (['channel.poll.created', 'channel.poll.changed', 'channel.poll.closed'].includes(frame.type)
-            && frame.data && typeof frame.data === 'object' && 'channel_id' in frame.data) {
-            if (String(frame.data.channel_id) === displayChannel.id) setPollsRefresh(value => value + 1);
+          const pollUpdate = pollRealtimeUpdate(frame.type, frame.data, displayChannel.id);
+          if (pollUpdate) {
+            if ('hiddenPollId' in pollUpdate && typeof pollUpdate.hiddenPollId === 'string') setHiddenPollId(pollUpdate.hiddenPollId);
+            if ('restoredPollId' in pollUpdate && typeof pollUpdate.restoredPollId === 'string') setHiddenPollId(current => current === pollUpdate.restoredPollId ? null : current);
+            setPollsRefresh(value => value + 1);
             return;
           }
           if (frame.type === 'channel.visibility.changed' && frame.data && typeof frame.data === 'object' && 'channel_id' in frame.data) {
@@ -1155,6 +1159,7 @@ function App() {
         membersState={membersState}
         membersLoading={showMembersLoading}
         pollsRefresh={pollsRefresh}
+        hiddenPollId={hiddenPollId}
         onClose={() => setShowMembers(false)}
         onTabChange={tab => {
           setActivityTab(tab);

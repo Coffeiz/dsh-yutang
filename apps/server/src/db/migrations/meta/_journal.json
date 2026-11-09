@@ -148,6 +148,13 @@
       "when": 1794500000005,
       "tag": "0020_channel_polls",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1794500000006,
+      "tag": "0021_poll_moderation_target",
+      "breakpoints": true
     }
   ]
 }

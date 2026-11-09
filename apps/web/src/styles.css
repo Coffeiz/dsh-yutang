@@ -330,6 +330,9 @@ button:focus-visible, input:focus-visible { outline: none; box-shadow: var(--yt-
 .polls-panel-content { display: flex; min-height: 0; flex: 1; flex-direction: column; }
 .polls-summary { padding: 13px 15px 9px; color: #8b92a0; font-size: 10px; }
 .polls-virtual-scroll { min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; scrollbar-color: #353943 transparent; scrollbar-width: thin; }
+.polls-load-more { display: flex; justify-content: center; padding: 5px 12px 12px; }
+.polls-load-more button { border: 1px solid #303540; border-radius: 7px; padding: 6px 10px; color: #aeb5c3; background: #20232b; font: inherit; font-size: 10px; cursor: pointer; }
+.polls-load-more button:hover { border-color: #4b75dc; color: #dce5ff; }
 .poll-virtual-row { position: absolute; top: 0; left: 0; width: 100%; padding: 0 11px 9px; }
 .poll-summary-row { padding: 0; }
 .poll-day-toggle { display: flex; width: 100%; height: 32px; align-items: center; gap: 7px; border: 0; padding: 0 5px; color: #aab1bf; background: transparent; text-align: left; cursor: pointer; }

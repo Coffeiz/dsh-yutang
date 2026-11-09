@@ -31,10 +31,18 @@ function pollHash(input: z.infer<typeof createBody>) {
   return createHash("sha256").update(JSON.stringify(input)).digest("hex");
 }
 
-async function closeExpired(pool: pg.Pool, hub: RealtimeHub) {
-  const { rows } = await pool.query<{ id: string; channel_id: string }>(`update channel_polls set status='closed',closed_at=now(),closed_reason='expired'
-    where status='open' and ends_at<=now() returning id,channel_id`);
-  for (const item of rows) hub.publishChannel(item.channel_id, realtimeEvent("channel.poll.closed", { poll_id: item.id, channel_id: item.channel_id }));
+export async function closeExpired(pool: pg.Pool, hub: RealtimeHub) {
+  const { rows } = await pool.query<{ id: string; channel_id: string; previous_status: string }>(`with expired as (
+      select id,channel_id,status as previous_status from channel_polls
+      where ends_at<=now() and (status in ('open','hidden') or (status='closed' and (closed_at is null or closed_reason is null)))
+      for update
+    ), finalized as (
+      update channel_polls p set status=case when p.status='open' then 'closed' else p.status end,
+        closed_at=coalesce(p.closed_at,now()),closed_reason=coalesce(p.closed_reason,'expired')
+      from expired e where p.id=e.id
+      returning p.id,p.channel_id,e.previous_status
+    ) select id,channel_id,previous_status from finalized`);
+  for (const item of rows) if (item.previous_status === "open") hub.publishChannel(item.channel_id, realtimeEvent("channel.poll.closed", { poll_id: item.id, channel_id: item.channel_id }));
 }
 
 async function pollDto(pool: pg.Pool, row: PollRow, agentId?: string) {
@@ -198,7 +206,8 @@ export function registerPollRoutes(app: FastifyInstance, db: Database, pool: pg.
       if (!poll || poll.status === "hidden") throw new ApiError(404, "POLL_NOT_FOUND", "Poll not found");
       if (poll.status !== "open" || new Date(poll.ends_at) <= new Date()) throw new ApiError(409, "POLL_CLOSED", "This poll has ended");
       const { rows: memberRows } = await client.query(`select 1 from channel_members m join channels c on c.id=m.channel_id join topics t on t.id=c.topic_id
-        where m.channel_id=$1 and m.agent_id=$2 and c.status='active' and c.manual_hidden=false and t.status='active' and t.manual_hidden=false`, [poll.channel_id, principal.agentId]);
+        where m.channel_id=$1 and m.agent_id=$2 and c.status='active' and c.visibility='public' and c.manual_hidden=false
+          and t.status='active' and t.visibility='public' and t.manual_hidden=false`, [poll.channel_id, principal.agentId]);
       if (!memberRows[0]) throw new ApiError(403, "POLL_CHANNEL_MEMBERSHIP_REQUIRED", "Join the channel before voting");
       const { rows: optionRows } = await client.query("select id from channel_poll_options where id=$1 and poll_id=$2", [input.option_id, poll.id]);
       if (!optionRows[0]) throw new ApiError(404, "POLL_OPTION_NOT_FOUND", "Option does not belong to this poll");

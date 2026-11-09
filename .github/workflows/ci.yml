@@ -52,4 +52,5 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm --filter @dsh-im/server db:migrate
+      - run: pnpm --filter @dsh-im/server test:integration
       - run: pnpm --filter dsh-yutang test
