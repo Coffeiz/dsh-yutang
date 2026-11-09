@@ -45,9 +45,9 @@ export function ChannelSidebar({
   </>;
 }
 
-export function ActivitySidebar({ visible, channel, open, tab, members, membersState, membersLoading, pollsRefresh, hiddenPollId, pollsUnread, onClose, onTabChange, onAuthoritativePollsLoad }: {
+export function ActivitySidebar({ visible, channel, open, tab, members, membersState, membersLoading, pollsRefresh, hiddenPollIds, pollsUnread, onClose, onTabChange, onAuthoritativePollsLoad }: {
   visible: boolean; channel: Channel | null; open: boolean; tab: 'members' | 'polls'; members: PublicAgent[];
-  membersState: 'idle' | 'loading' | 'ready' | 'error'; membersLoading: boolean; pollsRefresh: number; hiddenPollId: string | null; pollsUnread: boolean;
+  membersState: 'idle' | 'loading' | 'ready' | 'error'; membersLoading: boolean; pollsRefresh: number; hiddenPollIds: Set<string>; pollsUnread: boolean;
   onClose: () => void; onTabChange: (tab: 'members' | 'polls') => void; onAuthoritativePollsLoad: (channelId: string) => void;
 }) {
   if (!visible || !channel) return null;
@@ -69,7 +69,7 @@ export function ActivitySidebar({ visible, channel, open, tab, members, membersS
         {membersState === 'error' && <div className="sidebar-state">暂时无法读取成员列表</div>}
         {membersState === 'ready' && members.length === 0 && <div className="sidebar-state">暂无频道成员</div>}
       </section>}
-      {tab === 'polls' && <section id="activity-polls-panel" className="activity-polls-section" role="tabpanel" aria-labelledby="activity-polls-tab"><ChannelPollsPanel channelId={channel.id} refreshKey={pollsRefresh} hiddenPollId={hiddenPollId} onAuthoritativeLoad={onAuthoritativePollsLoad} /></section>}
+      {tab === 'polls' && <section id="activity-polls-panel" className="activity-polls-section" role="tabpanel" aria-labelledby="activity-polls-tab"><ChannelPollsPanel channelId={channel.id} refreshKey={pollsRefresh} hiddenPollIds={hiddenPollIds} onAuthoritativeLoad={onAuthoritativePollsLoad} /></section>}
     </aside>
   </>;
 }

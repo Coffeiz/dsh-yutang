@@ -26,9 +26,30 @@ export function shouldClearPollsUnread(activeTab: 'members' | 'polls', sidebarVi
   return activeTab === 'polls' && sidebarVisible;
 }
 
-export function reconcileHiddenPollAfterSync(
-  hiddenPoll: { channelId: string; pollId: string } | null,
-  syncedChannelId: string,
-) {
-  return hiddenPoll?.channelId === syncedChannelId ? null : hiddenPoll;
+export type HiddenPollMasks = Map<string, Set<string>>;
+
+export function addHiddenPollMask(current: HiddenPollMasks, channelId: string, pollId: string): HiddenPollMasks {
+  const next = new Map(current);
+  const channelPolls = new Set(current.get(channelId) ?? []);
+  channelPolls.add(pollId);
+  next.set(channelId, channelPolls);
+  return next;
+}
+
+export function removeHiddenPollMask(current: HiddenPollMasks, channelId: string, pollId: string): HiddenPollMasks {
+  const existing = current.get(channelId);
+  if (!existing?.has(pollId)) return current;
+  const next = new Map(current);
+  const channelPolls = new Set(existing);
+  channelPolls.delete(pollId);
+  if (channelPolls.size) next.set(channelId, channelPolls);
+  else next.delete(channelId);
+  return next;
+}
+
+export function reconcileHiddenPollsAfterSync(current: HiddenPollMasks, syncedChannelId: string): HiddenPollMasks {
+  if (!current.has(syncedChannelId)) return current;
+  const next = new Map(current);
+  next.delete(syncedChannelId);
+  return next;
 }

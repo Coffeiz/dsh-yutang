@@ -3,7 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { VirtualTopicGrid } from '../components/VirtualTopicGrid';
 import { ChatMessage, dayLabel, HelpPage, Icon, mergeMessages } from './lobby/Presentation';
 import { ActivitySidebar, ChannelSidebar } from './lobby/LobbySidebars';
-import { pollRealtimeUpdate, reconcileHiddenPollAfterSync, shouldClearPollsUnread, shouldMarkPollsUnread } from './lobby/poll-realtime';
+import { addHiddenPollMask, pollRealtimeUpdate, reconcileHiddenPollsAfterSync, removeHiddenPollMask, shouldClearPollsUnread, shouldMarkPollsUnread } from './lobby/poll-realtime';
 import { useDelayedFlag, useDelayedRealtimeState, type RealtimeState } from './lobby/useDelayedStatus';
 import { LeaderboardPage } from './LeaderboardPage';
 import { channelHeaderTitle, latestRecentChannels } from '../navigation-history.js';
@@ -37,6 +37,7 @@ const TOPIC_PAGE_SIZE = 30;
 const REALTIME_HEARTBEAT_INTERVAL_MS = 60_000;
 const REALTIME_HEARTBEAT_TIMEOUT_MS = 150_000;
 const RECENT_CHANNEL_CACHE_TTL_MS = 5 * 60 * 1000;
+const EMPTY_HIDDEN_POLL_IDS = new Set<string>();
 
 function App() {
   const [navigation, setNavigation] = useState<BrowserNavigation>(readBrowserNavigation);
@@ -85,7 +86,7 @@ function App() {
   const activityTabRef = useRef(activityTab);
   const [unreadPollChannelIds, setUnreadPollChannelIds] = useState<Set<string>>(() => new Set());
   const [pollsRefresh, setPollsRefresh] = useState(0);
-  const [hiddenPoll, setHiddenPoll] = useState<{ channelId: string; pollId: string } | null>(null);
+  const [hiddenPollMasks, setHiddenPollMasks] = useState<Map<string, Set<string>>>(() => new Map());
   const [realtimeState, setRealtimeState] = useState<RealtimeState>('idle');
   const [showChannels, setShowChannels] = useState(false);
   const [showMembers, setShowMembers] = useState(false);
@@ -128,7 +129,7 @@ function App() {
   }, []);
 
   const reconcileHiddenPollsAfterLoad = useCallback((channelId: string) => {
-    setHiddenPoll(current => reconcileHiddenPollAfterSync(current, channelId));
+    setHiddenPollMasks(current => reconcileHiddenPollsAfterSync(current, channelId));
   }, []);
 
   useLayoutEffect(() => {
@@ -727,10 +728,10 @@ function App() {
               setUnreadPollChannelIds(current => new Set(current).add(displayChannel.id));
             }
             if ('hiddenPollId' in pollUpdate && typeof pollUpdate.hiddenPollId === 'string') {
-              setHiddenPoll({ channelId: displayChannel.id, pollId: pollUpdate.hiddenPollId });
+              setHiddenPollMasks(current => addHiddenPollMask(current, displayChannel.id, pollUpdate.hiddenPollId));
             }
             if ('restoredPollId' in pollUpdate && typeof pollUpdate.restoredPollId === 'string') {
-              setHiddenPoll(current => current?.channelId === displayChannel.id && current.pollId === pollUpdate.restoredPollId ? null : current);
+              setHiddenPollMasks(current => removeHiddenPollMask(current, displayChannel.id, pollUpdate.restoredPollId));
             }
             setPollsRefresh(value => value + 1);
             return;
@@ -1192,7 +1193,7 @@ function App() {
         membersState={membersState}
         membersLoading={showMembersLoading}
         pollsRefresh={pollsRefresh}
-        hiddenPollId={hiddenPoll && hiddenPoll.channelId === displayChannel?.id ? hiddenPoll.pollId : null}
+        hiddenPollIds={displayChannel ? hiddenPollMasks.get(displayChannel.id) ?? EMPTY_HIDDEN_POLL_IDS : EMPTY_HIDDEN_POLL_IDS}
         pollsUnread={Boolean(displayChannel && unreadPollChannelIds.has(displayChannel.id))}
         onAuthoritativePollsLoad={reconcileHiddenPollsAfterLoad}
         onClose={() => setShowMembers(false)}

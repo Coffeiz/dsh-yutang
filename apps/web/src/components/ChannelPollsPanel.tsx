@@ -3,9 +3,10 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { listChannelPolls, type ChannelPoll } from '../api';
 import { createRequestGeneration } from './request-generation';
 
-type Props = { channelId: string; refreshKey?: number; hiddenPollId?: string | null; onAuthoritativeLoad?: (channelId: string) => void };
+type Props = { channelId: string; refreshKey?: number; hiddenPollIds?: Set<string>; onAuthoritativeLoad?: (channelId: string) => void };
 type LoadState = 'loading' | 'ready' | 'error';
 type PollRow = { kind: 'summary' } | { kind: 'poll'; poll: ChannelPoll } | { kind: 'day'; key: string; label: string; count: number; expanded: boolean };
+const NO_HIDDEN_POLLS = new Set<string>();
 
 function localDay(value: string) {
   const date = new Date(value);
@@ -26,7 +27,7 @@ function remaining(endsAt: string) {
   return `剩余 ${Math.max(1, Math.floor(ms / 60_000))} 分钟`;
 }
 
-export function ChannelPollsPanel({ channelId, refreshKey = 0, hiddenPollId = null, onAuthoritativeLoad }: Props) {
+export function ChannelPollsPanel({ channelId, refreshKey = 0, hiddenPollIds = NO_HIDDEN_POLLS, onAuthoritativeLoad }: Props) {
   const [active, setActive] = useState<ChannelPoll[]>([]);
   const [closed, setClosed] = useState<ChannelPoll[]>([]);
   const [state, setState] = useState<LoadState>('loading');
@@ -86,10 +87,10 @@ export function ChannelPollsPanel({ channelId, refreshKey = 0, hiddenPollId = nu
   }, [loadFirstPage, refreshKey]);
 
   useEffect(() => {
-    if (!hiddenPollId) return;
-    setActive(current => current.filter(poll => poll.id !== hiddenPollId));
-    setClosed(current => current.filter(poll => poll.id !== hiddenPollId));
-  }, [hiddenPollId]);
+    if (!hiddenPollIds.size) return;
+    setActive(current => current.filter(poll => !hiddenPollIds.has(poll.id)));
+    setClosed(current => current.filter(poll => !hiddenPollIds.has(poll.id)));
+  }, [hiddenPollIds]);
 
   const loadMore = useCallback(async () => {
     if (loadingRef.current || !hasMore || !cursor) return;
@@ -113,8 +114,8 @@ export function ChannelPollsPanel({ channelId, refreshKey = 0, hiddenPollId = nu
     }
   }, [channelId, cursor, hasMore]);
 
-  const visibleActive = useMemo(() => active.filter(poll => poll.id !== hiddenPollId), [active, hiddenPollId]);
-  const visibleClosed = useMemo(() => closed.filter(poll => poll.id !== hiddenPollId), [closed, hiddenPollId]);
+  const visibleActive = useMemo(() => active.filter(poll => !hiddenPollIds.has(poll.id)), [active, hiddenPollIds]);
+  const visibleClosed = useMemo(() => closed.filter(poll => !hiddenPollIds.has(poll.id)), [closed, hiddenPollIds]);
 
   const rows = useMemo<PollRow[]>(() => {
     const result: PollRow[] = [{ kind: 'summary' }, ...visibleActive.map(poll => ({ kind: 'poll' as const, poll }))];
