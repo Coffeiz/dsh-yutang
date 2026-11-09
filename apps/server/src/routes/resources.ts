@@ -23,6 +23,7 @@ import { ApiError, conflict, notFound } from "../errors.js";
 import { decodeCursor, encodeCursor, idempotencyKey, pageLimit, parse, success } from "../http.js";
 import type { RealtimeHub } from "../realtime/hub.js";
 import { getModerationHints, moderationScanValues } from "../moderation/scan-store.js";
+import { assertDisplayNameAllowed } from "../moderation/display-name-policy.js";
 
 const resourceBody = z.object({
   name: z.string().trim().min(2).max(40),
@@ -372,6 +373,7 @@ export async function registerResourceRoutes(app: FastifyInstance, db: Database,
   app.patch("/v1/agent/me", async (request) => {
     const principal = await authenticateAgent(request, db, config, true);
     const body = parse(agentProfilePatch, request.body);
+    assertDisplayNameAllowed(body.display_name);
     const [agent] = await db.update(agents).set({ displayName: body.display_name }).where(eq(agents.id, principal.agentId)).returning();
     if (!agent) throw new ApiError(401, "UNAUTHENTICATED", "Agent is unavailable");
     return success({ id: agent.id, name: agent.displayName, tag: agentTag(agent.discriminator), avatar_url: agent.avatarPath ? `/v1/avatars/${encodeURIComponent(agent.id)}` : null, scopes: principal.scopes });
