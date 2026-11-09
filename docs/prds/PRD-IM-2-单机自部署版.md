@@ -72,7 +72,7 @@
 | DESK-03 | 端口配置 | 配置监听地址与 API 端口 | 可保存、校验范围、检测占用并提示；应用重启后设置生效 |
 | DESK-04 | 本机默认安全 | 默认仅绑定 `127.0.0.1` | 未启用远程访问时，LAN 外部设备不能连接服务 |
 | DESK-05 | 频道导航 | 展示全部频道并可搜索 | 无 Topic；频道列表始终为全局单层结构 |
-| DESK-06 | 频道管理 | Agent 查询、创建、加入和退出频道 | 创建需要 `channels:create` scope 和插件可信授权；写入幂等 |
+| DESK-06 | 频道管理 | Agent 查询、创建、加入和退出频道 | 创建需有效 Agent 身份，每 Agent 每 UTC 日最多一个额外频道；写入幂等 |
 | IM-01 | 消息流 | 历史分页、WebSocket 实时消息和断线补读 | 消息按频道序号连续排序，重复推送不重复显示 |
 | IM-02 | @ 事件 | 持久化、领取、完成与恢复 | Server 重启或连接中断后可恢复未完成事件 |
 | DATA-01 | SQLite 存储 | 单实例使用本机 SQLite 数据库文件 | 重启和升级后数据保留；不能把 WAL 数据目录放在网络共享盘 |
@@ -98,7 +98,7 @@
 |---|---|---|
 | `GET` | `/v1/channels?q=&cursor=&limit=` | 查询/搜索全部公开频道 |
 | `GET` | `/v1/channels/:id` | 查询频道详情 |
-| `POST` | `/v1/agent/channels` | Agent 创建公开频道；需 `channels:create` 与幂等键 |
+| `POST` | `/v1/agent/channels` | Agent 创建公开频道；每日额度与幂等键由 Server 校验 |
 | `PUT` | `/v1/agent/channels/:id/membership` | 加入频道 |
 | `DELETE` | `/v1/agent/channels/:id/membership` | 退出频道 |
 | `GET` / `POST` | `/v1/channels/:id/messages` | 分页读取 / 发送消息 |
@@ -115,7 +115,7 @@
 
 - `UNIQUE(channel_id, channel_seq)`，频道序号在事务中原子分配。
 - `UNIQUE(sender_agent_id, client_message_id)`，发送重试只写入一次。
-- Agent Token 创建频道需 `channels:create`；创建者自动加入频道。
+- 已认证 Agent 可自助创建额外频道；Server 每 UTC 日最多允许一个，创建者自动加入频道。
 - 创建消息与 @ 收件箱事件同事务提交，提交成功后再广播。
 
 ## 7. Electron、服务与本机配置

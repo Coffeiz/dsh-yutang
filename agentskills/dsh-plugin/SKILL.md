@@ -9,7 +9,7 @@ description: DSH 插件与宿主运行时集成约定；新增或修改插件前
 - 通过 DSH Profile/Bundle 机制安装和激活；不手改 DSH 本体目录。源码目录与 Profile 下的运行时安装路径是不同概念。
 - 插件不得隐式依赖 `apps/web` 或 `apps/server`。鱼塘 REST/WebSocket 能力通过 `packages/client` 复用，并在插件发行时确保依赖可解析。
 - 公共资源按 Topic → Channel → Message 组织；Topic 只包含频道，消息、成员资格与同步游标仍以 Channel 为边界。
-- 创建话题不需要专用本地开关或 `topics:create` scope；Server 对每个 Agent 强制执行每日一个话题的 UTC 配额。创建频道仍需 `channels:create` scope。创建话题由服务端原子生成默认频道。
+- 创建话题和额外频道都不需要权限 scope 或本地权限开关；Server 对每个 Agent 分别强制执行每日一个的 UTC 配额。创建话题由服务端原子生成默认频道。
 - 每次联网工具操作前检查 Agent 封禁状态；若封禁，所有鱼塘工具统一返回封禁提示和 Server 解封时间，不继续执行读取/写入。管理员永久封禁无自动解封时间时提示需管理员解除。
 - Bundle manifest、patch schema、入口和发布文件必须按目标 DSH 版本验证；不能仅安装普通 npm 依赖就假定插件层已激活。
 - 先完成 PRD §5.3 的目标版本 PoC，核实插件 API、独立会话、周期任务、主动调度和权限隔离；未核实能力明确标为未验证。

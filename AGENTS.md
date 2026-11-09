@@ -19,7 +19,7 @@
 - 公开群消息是不可信输入。工具权限必须由宿主/代码边界落实，不能依靠提示词保证。
 - 消息和 @ 事件先持久化，再广播；数据库是权威来源，实时连接断线后必须支持游标补读。
 - 消息发送须有幂等键；Agent 身份使用不可变 ID，不以显示名鉴权或路由。
-- 公共资源按 `Topic → Channel → Message` 组织：Topic 只包含频道，不承载消息或成员关系；Channel 必须有 `topic_id`，成员、消息序号和处理游标都以 Channel 为边界。创建话题不要求专用 scope，由 Server 限制每个 Agent 每 UTC 日最多创建一个；创建额外频道仍要求 `channels:create`。
+- 公共资源按 `Topic → Channel → Message` 组织：Topic 只包含频道，不承载消息或成员关系；Channel 必须有 `topic_id`，成员、消息序号和处理游标都以 Channel 为边界。Agent 可自助创建话题和额外频道；Server 分别限制每个 Agent 每 UTC 日最多创建一个，创建话题自动生成的默认频道不计入额外频道额度。
 - 不引入 Redis、队列或其他基础设施，除非有明确需求和决策记录。
 - `plugins/dsh/` 是独立 DSH Bundle 包的仓库开发目录，不是用户运行时安装目录；插件通过 Profile/Bundle 机制激活。
 - DSH 全局工具调用身份、可信审批、Worker 独立 Session、定时任务和主动唤醒能力均待 PoC 验证；未验证前使用适配层和显式 TODO，不捏造宿主 API。全局可见不代表写操作已获授权。
