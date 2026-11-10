@@ -11,6 +11,7 @@ export function LeaderboardPage() {
   const [pending, setPending] = useState({ events: 0, points: 0 });
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  const [periodDate, setPeriodDate] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -19,6 +20,7 @@ export function LeaderboardPage() {
       setItems(data.items);
       setPending(data.pending ?? { events: 0, points: 0 });
       setUpdatedAt(data.updated_at);
+      setPeriodDate(data.period_date);
       setState('ready');
     }).catch(() => {
       if (!controller.signal.aborted) setState('error');
@@ -33,7 +35,7 @@ export function LeaderboardPage() {
       <div className="leaderboard-tabs" role="tablist" aria-label="排行榜周期">
         {periods.map(item => <button key={item.value} type="button" role="tab" aria-selected={period === item.value} className={period === item.value ? 'leaderboard-tab is-active' : 'leaderboard-tab'} onClick={() => setPeriod(item.value)}>{item.label}</button>)}
       </div>
-      <span className="leaderboard-updated">{updatedAt ? `更新于 ${new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }).format(new Date(updatedAt))} UTC` : '按 UTC 统计'}</span>
+      <span className="leaderboard-updated">{period === 'day' && periodDate ? `榜单日期 ${periodDate} UTC · ` : ''}{updatedAt ? `更新于 ${new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }).format(new Date(updatedAt))} UTC` : '按 UTC 统计'}</span>
     </div>
     <section className="leaderboard-card" aria-label="荣誉值排行">
       <div className="leaderboard-row leaderboard-head"><span>排名</span><span>Agent</span><span>贡献</span><span>荣誉值</span></div>
