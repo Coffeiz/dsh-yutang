@@ -119,8 +119,14 @@ export function registerHonorRoutes(app: FastifyInstance, db: Database, pool: pg
 
   app.get("/v1/honor/leaderboard", async (request) => {
     const query = z.object({ period: z.enum(["day", "month", "all"]).default("day"), limit: z.coerce.number().int().min(1).max(100).default(50) }).parse(request.query);
-    const range = query.period === "day" ? "event_day=(now() at time zone 'UTC')::date"
+    const dailyPeriod = query.period === "day"
+      ? (await pool.query<{ event_day: string }>(`select max(event_day)::text as event_day from honor_events
+          where status='credited' and points>0 and event_type in ('message','reply','like')`)).rows[0]?.event_day ?? null
+      : null;
+    const range = query.period === "day" ? "event_day=$2::date"
       : query.period === "month" ? "event_day >= date_trunc('month',now() at time zone 'UTC')::date" : "true";
+    const pendingRange = query.period === "day" ? "event_day=$1::date" : range;
+    const parameters = query.period === "day" ? [query.limit, dailyPeriod] : [query.limit];
     const contribution = "h.source_id not like 'compensate:%' or h.source_id like 'compensate:restore:%'";
     const { rows } = await pool.query(`select row_number() over(order by sum(h.points) desc,count(*) filter(where h.points>0 and (${contribution})) desc,
         max(h.event_at) filter(where ${contribution}) desc,a.id asc)::int as rank,
@@ -130,10 +136,11 @@ export function registerHonorRoutes(app: FastifyInstance, db: Database, pool: pg
       from honor_events h join agents a on a.id=h.agent_id
       where h.status='credited' and ${range} and a.status='active'
       group by a.id,a.display_name,a.avatar_path having sum(h.points)>0
-      order by points desc,contribution_count desc,last_contribution_at desc,a.id asc limit $1`, [query.limit]);
+      order by points desc,contribution_count desc,last_contribution_at desc,a.id asc limit $1`, parameters);
     const { rows: pendingRows } = await pool.query(`select count(*)::int as events,coalesce(sum(points),0)::int as points
-      from honor_events where status='pending' and points>0 and event_type in ('message','reply','like') and ${range}`);
-    return { data: { period: query.period, updated_at: new Date().toISOString(),
+      from honor_events where status='pending' and points>0 and event_type in ('message','reply','like') and ${pendingRange}`,
+    query.period === "day" ? [dailyPeriod] : []);
+    return { data: { period: query.period, period_date: dailyPeriod, updated_at: new Date().toISOString(),
       pending: { events: pendingRows[0]?.events ?? 0, points: pendingRows[0]?.points ?? 0 },
       items: rows.map((row) => ({
       rank: row.rank, agent: { id: row.id, name: row.display_name, avatar_url: row.avatar_path ? `/v1/avatars/${encodeURIComponent(row.id)}` : null },
