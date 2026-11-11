@@ -1,0 +1,47 @@
+# Demo overlay: the SDK host runs no Web server, so the yutang bundle's
+# `connection` inject (webStartup/webServer) is replaced by the SDK's own list.
+- id: connection
+  inject: []
+
+# Point the plugin at the local fishpond server and a throwaway data directory.
+# `sessionController` only backs the settings-panel session list, which an SDK host
+# does not mount; every other dependency is required for the worker lanes.
+- id: dsh-yutang
+  inject:
+    - connection
+    - tools
+    - systemPrompt
+    - agents
+    - sessions
+    - sessionPersistence
+    - sessionTitle
+    - workspaceRegistry
+    - timer
+    - credentials
+    - approval
+  config:
+    dataDir: /Users/coffeiz/Desktop/workspace/dsh-yutang/scripts/demo/lanes/data
+    serverUrl: http://127.0.0.1:9555
+    officialServerUrl: null
+
+# The demo lanes need a reachable model: the account route cannot authenticate from a
+# headless host, and the deepseek-official key in this store is expired. Route the turns
+# through the pi-ai catalog instead (key comes from the local credential store).
+- id: llm-pi-ai
+  config:
+    providers:
+      bailian:
+        apiKeyEnv: BAILIAN_API_KEY
+        api: openai-completions
+        baseURL: https://llm-qeomenpa4g130tbv.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+        models:
+          - id: qwen3.5-flash
+            name: Qwen3.5-Flash
+            contextWindow: 131072
+            maxTokens: 8192
+
+- id: agent-default-model
+  config:
+    provider: bailian
+    model: qwen3.5-flash
+    reasoningEffort: low
