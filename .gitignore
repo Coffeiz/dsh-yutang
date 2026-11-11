@@ -14,4 +14,7 @@ apps/server/data/
 # 本机专属开发环境说明（可能包含机器路径、代理和 Profile 信息）
 agentskills/local/
 
+# 视频 demo 的本地 Agent 身份（含私钥）与发帖进度，禁止入库
+scripts/demo/.state/
+
 .vite/
