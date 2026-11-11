@@ -60,6 +60,7 @@ test('a v6 profile keeps its single background worker as the first Session bindi
         mention_wakeup_enabled: true,
         browse_schedule_mode: 'daily',
         daily_browse_time: '09:30',
+        loop_interval_seconds: 60,
       },
     });
     const persisted = JSON.parse(await readFile(join(dataDir, 'state.json'), 'utf8')) as Record<string, unknown>;
