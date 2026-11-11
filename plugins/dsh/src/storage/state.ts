@@ -4,8 +4,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { normalizeTurnLockAllowlist, type TurnLockAllowedTool } from '../security/tool-lock.js';
 
 export type SocialMode = 'auto' | 'lurk' | 'manual' | 'off';
-export type BrowseScheduleMode = 'off' | 'hourly' | 'daily' | 'curiosity';
+export type BrowseScheduleMode = 'off' | 'hourly' | 'daily' | 'curiosity' | 'loop';
 export const CURIOSITY_THRESHOLD = 30;
+/** Loop browse keeps re-reading the channel on a short fixed cadence so bound personas can answer each other. */
+export const LOOP_BROWSE_MIN_SECONDS = 20;
+export const LOOP_BROWSE_MAX_SECONDS = 3600;
+export const LOOP_BROWSE_DEFAULT_SECONDS = 60;
 const HOUR_MS = 60 * 60 * 1000;
 export interface IdentityState {
   owner_id: string;
@@ -63,6 +67,8 @@ export interface SessionBinding {
   mention_wakeup_enabled: boolean;
   browse_schedule_mode: BrowseScheduleMode;
   daily_browse_time: string;
+  /** Cadence for `browse_schedule_mode: 'loop'`; each lane also starts on its own phase offset. */
+  loop_interval_seconds: number;
 }
 
 export interface YutangState {
@@ -98,7 +104,9 @@ const validTurnToolLocks = (value: unknown): Record<string, number> => value && 
 const validSessionId = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 160;
 const validTimeOfDay = (value: unknown): string => typeof value === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/u.test(value) ? value : defaultSettings.daily_browse_time;
 const validBrowseScheduleMode = (value: unknown, fallback: BrowseScheduleMode = 'off'): BrowseScheduleMode =>
-  ['off', 'hourly', 'daily', 'curiosity'].includes(String(value)) ? value as BrowseScheduleMode : fallback;
+  ['off', 'hourly', 'daily', 'curiosity', 'loop'].includes(String(value)) ? value as BrowseScheduleMode : fallback;
+const validLoopInterval = (value: unknown): number => typeof value === 'number' && Number.isSafeInteger(value)
+  && value >= LOOP_BROWSE_MIN_SECONDS && value <= LOOP_BROWSE_MAX_SECONDS ? value : LOOP_BROWSE_DEFAULT_SECONDS;
 const normalizeSessionBindings = (value: unknown, servers: ServerConnectionState[]): Record<string, SessionBinding> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   const knownConnections = new Set(servers.map(server => server.id));
@@ -111,6 +119,7 @@ const normalizeSessionBindings = (value: unknown, servers: ServerConnectionState
       mention_wakeup_enabled: item.mention_wakeup_enabled === true,
       browse_schedule_mode: validBrowseScheduleMode(item.browse_schedule_mode),
       daily_browse_time: validTimeOfDay(item.daily_browse_time),
+      loop_interval_seconds: validLoopInterval(item.loop_interval_seconds),
     }]];
   });
   return Object.fromEntries(entries);
@@ -198,7 +207,7 @@ export class StateStore {
     const input = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
     const socialMode = ['auto', 'lurk', 'manual', 'off'].includes(String(input.social_mode)) ? input.social_mode as SocialMode : defaultSettings.social_mode;
     const pollInterval = typeof input.poll_interval_minutes === 'number' && [5, 10, 30, 60].includes(input.poll_interval_minutes) ? input.poll_interval_minutes as PluginSettings['poll_interval_minutes'] : defaultSettings.poll_interval_minutes;
-    const browseScheduleMode = ['off', 'hourly', 'daily', 'curiosity'].includes(String(input.browse_schedule_mode))
+    const browseScheduleMode = ['off', 'hourly', 'daily', 'curiosity', 'loop'].includes(String(input.browse_schedule_mode))
       ? input.browse_schedule_mode as BrowseScheduleMode
       : input.auto_browse_enabled === true ? 'hourly' : defaultSettings.browse_schedule_mode;
     const dailyBrowseTime = typeof input.daily_browse_time === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/u.test(input.daily_browse_time) ? input.daily_browse_time : defaultSettings.daily_browse_time;
@@ -256,6 +265,7 @@ export class StateStore {
         mention_wakeup_enabled: state.settings.mention_wakeup_enabled,
         browse_schedule_mode: state.settings.browse_schedule_mode,
         daily_browse_time: state.settings.daily_browse_time,
+        loop_interval_seconds: LOOP_BROWSE_DEFAULT_SECONDS,
       };
     }
     return state;
@@ -372,6 +382,26 @@ export class StateStore {
     return true;
   }
 
+  /**
+   * Claim one loop round for a single lane. The first call only seeds the schedule
+   * (offset by `phaseMs`) so several bound lanes never start in lockstep.
+   */
+  async claimLoopBrowse(serverId: string, now: number, intervalSeconds: number, phaseMs = 0) {
+    const state = await this.load();
+    const connection = state.servers.find(server => server.id === serverId);
+    if (!connection) throw new Error('找不到此 Server 连接。');
+    const intervalMs = validLoopInterval(intervalSeconds) * 1000;
+    if (connection.browse_next_run_at === null) {
+      connection.browse_next_run_at = now + (Math.max(0, Math.trunc(phaseMs)) % intervalMs);
+      await this.save();
+      return false;
+    }
+    if (now < connection.browse_next_run_at) return false;
+    connection.browse_next_run_at = now + intervalMs;
+    await this.save();
+    return true;
+  }
+
   async claimDailyBrowse(serverId: string, now: number, dailyTime: string) {
     const state = await this.load();
     const connection = state.servers.find(server => server.id === serverId);
@@ -418,6 +448,7 @@ export class StateStore {
       mention_wakeup_enabled: patch.mention_wakeup_enabled ?? current?.mention_wakeup_enabled ?? state.settings.mention_wakeup_enabled,
       browse_schedule_mode: patch.browse_schedule_mode ?? current?.browse_schedule_mode ?? state.settings.browse_schedule_mode,
       daily_browse_time: patch.daily_browse_time ?? current?.daily_browse_time ?? state.settings.daily_browse_time,
+      loop_interval_seconds: validLoopInterval(patch.loop_interval_seconds ?? current?.loop_interval_seconds ?? LOOP_BROWSE_DEFAULT_SECONDS),
     };
     state.session_bindings[sessionId] = binding;
     if (state.last_yutang_session_id === null) state.last_yutang_session_id = sessionId;
@@ -430,6 +461,7 @@ export class StateStore {
     const binding = state.session_bindings[sessionId];
     if (!binding) throw new Error('此 DSH Session 尚未绑定鱼塘身份。');
     Object.assign(binding, patch);
+    binding.loop_interval_seconds = validLoopInterval(binding.loop_interval_seconds);
     await this.save();
     return binding;
   }

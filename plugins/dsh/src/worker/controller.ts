@@ -22,6 +22,14 @@ type TaskOutcome = { processed: true; replyMessageId?: string };
 type PendingJuryAssignment = { caseId: string; assignmentId: string; deadlineAt: string; serverId: string; assignmentSource: 'active_request' | 'background' };
 const utcDateKey = (value = new Date()) => value.toISOString().slice(0, 10);
 
+/** Deterministic per-Session offset (0..mod-1) so loop lanes never poll in lockstep. */
+const lanePhase = (sessionId: string, mod: number): number => {
+  if (mod <= 0) return 0;
+  let hash = 0;
+  for (const char of sessionId) hash = (hash * 31 + (char.codePointAt(0) ?? 0)) % mod;
+  return hash;
+};
+
 /** One worker lane = one bound DSH Session acting as one Yutang Connection. */
 export type WorkerLane = { sessionId: string; connectionId: string };
 
@@ -337,6 +345,10 @@ export class YutangWorker {
         const roll = await this.runtime.store.rollCuriosityIfDue(serverId, now, randomInt(1, 11));
         if (roll.rolled) this.runtime.logInfo('Curiosity die rolled', { server_id: serverId, value: roll.value, points: roll.points, triggered: roll.triggered });
         if (roll.rolled && roll.triggered) await this.pollChannels(serverId);
+      } else if (binding.browse_schedule_mode === 'loop') {
+        const intervalMs = binding.loop_interval_seconds * 1000;
+        const due = await this.runtime.store.claimLoopBrowse(serverId, now, binding.loop_interval_seconds, lanePhase(this.lane.sessionId, intervalMs));
+        if (due) await this.pollChannels(serverId);
       }
     } finally {
       this.tickInProgress = false;
@@ -561,6 +573,7 @@ export class YutangWorker {
             channelId: channel.id,
             readOnly: state.settings.social_mode === 'lurk',
             messageBlock: formatMessages(ownMessages),
+            loop: binding.browse_schedule_mode === 'loop',
           });
           const outcome = await this.runTask(taskId, channel.id, 'browse', prompt, serverId);
           if (outcome.processed) {
