@@ -9,8 +9,14 @@ import type { Agent } from '@deepseek-ai/dsh-agent';
 import { YutangRuntime } from '../src/service/runtime.js';
 import { StateStore } from '../src/storage/state.js';
 import { activeConnection } from '../src/storage/state.js';
-import { YutangWorker } from '../src/worker/controller.js';
+import { YutangWorker, type WorkerLane } from '../src/worker/controller.js';
 import { asCredentialProvider } from './helpers/credentials.js';
+
+/** Every lane is addressed by the bound Session it runs as. */
+const laneOf = async (runtime: YutangRuntime, sessionId?: string): Promise<WorkerLane> => {
+  const state = await runtime.state();
+  return { sessionId: sessionId ?? state.settings.scheduled_session_id ?? 'session-lane-default', connectionId: activeConnection(state).id };
+};
 
 test('registered Agent keeps realtime presence online when mention automation is disabled', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-yutang-presence-'));
@@ -18,7 +24,7 @@ test('registered Agent keeps realtime presence online when mention automation is
   await runtime.store.update({ identity: {
     owner_id: 'user_test', agent_id: 'agent_test', display_name: 'Synthetic', public_key: 'synthetic', scopes: [],
   } });
-  await runtime.updateSettings({ social_mode: 'manual', mention_wakeup_enabled: false });
+  await runtime.updateSettings({ social_mode: 'manual', mention_wakeup_enabled: false, scheduled_session_id: 'session-presence' });
   const sent: string[] = [];
   const listeners = new Map<string, (event: unknown) => void>();
   class FakeWebSocket {
@@ -30,7 +36,7 @@ test('registered Agent keeps realtime presence online when mention automation is
   }
   const originalWebSocket = globalThis.WebSocket;
   Object.defineProperty(globalThis, 'WebSocket', { configurable: true, value: FakeWebSocket });
-  Object.defineProperty(runtime, 'apiForCurrentAgent', { configurable: true, value: async () => ({
+  Object.defineProperty(runtime, 'apiForSession', { configurable: true, value: async () => ({
     baseUrl: 'http://127.0.0.1:9555', createRealtimeTicket: async () => ({ data: { ticket: 'synthetic-ticket' } }),
   }) });
   const fakeCtx = {
@@ -39,7 +45,7 @@ test('registered Agent keeps realtime presence online when mention automation is
     on: () => () => {},
     agents: {},
   } as unknown as Context;
-  const worker = new YutangWorker(fakeCtx, runtime);
+  const worker = new YutangWorker(fakeCtx, runtime, await laneOf(runtime));
   (worker as unknown as { lastWorkerError?: string }).lastWorkerError = 'connect ECONNREFUSED 127.0.0.1:9555';
   try {
     await worker.start();
@@ -113,7 +119,7 @@ test('Worker runs scheduled tasks in a fresh session linked to the selected DSH 
     },
   } as unknown as Context;
 
-  const worker = new YutangWorker(fakeCtx, runtime);
+  const worker = new YutangWorker(fakeCtx, runtime, await laneOf(runtime));
   try {
     const runTask = (worker as unknown as { runTask(taskId: string, channelId: string, source: 'browse', prompt: string): Promise<{ processed: boolean; replyMessageId?: string }> }).runTask.bind(worker);
     const outcome = await runTask('browse:channel-1:1:3', 'channel-1', 'browse', 'synthetic public messages');
@@ -147,10 +153,10 @@ test('Worker validates a stored selected session without resuming its private hi
     },
   } as unknown as Context;
 
-  const worker = new YutangWorker(fakeCtx, runtime);
+  const worker = new YutangWorker(fakeCtx, runtime, await laneOf(runtime));
   try {
-    const ensureSelectedSession = (worker as unknown as { ensureSelectedSession(): Promise<string> }).ensureSelectedSession.bind(worker);
-    assert.equal(await ensureSelectedSession(), 'session-persisted');
+    const ensureBoundSession = (worker as unknown as { ensureBoundSession(): Promise<string> }).ensureBoundSession.bind(worker);
+    assert.equal(await ensureBoundSession(), 'session-persisted');
   } finally {
     await worker.dispose();
     await rm(dataDir, { recursive: true, force: true });
@@ -163,7 +169,7 @@ test('turning off mention automation aborts lease renewal and completes the clai
   await runtime.store.update({ identity: {
     owner_id: 'user_test', agent_id: 'agent_test', display_name: 'Synthetic', public_key: 'synthetic', scopes: [],
   } });
-  await runtime.updateSettings({ social_mode: 'auto', mention_wakeup_enabled: true });
+  await runtime.updateSettings({ social_mode: 'auto', mention_wakeup_enabled: true, scheduled_session_id: 'session-mention' });
   let listener: ((sourceSession: { id: ReturnType<typeof SessionId> }, event: { type: string; data: { turn: number; reason: { kind: string } } }) => void) | undefined;
   const fakeCtx = {
     logger: { warn() {} },
@@ -173,7 +179,7 @@ test('turning off mention automation aborts lease renewal and completes the clai
     sessions: { flush: async () => true },
     agents: {},
   } as unknown as Context;
-  const worker = new YutangWorker(fakeCtx, runtime);
+  const worker = new YutangWorker(fakeCtx, runtime, await laneOf(runtime));
   let rejectTask!: (error: Error) => void;
   const session = { id: SessionId('worker-mention-test') };
   const agent = {
@@ -244,7 +250,7 @@ test('Worker disposal stops lease renewal and keeps terminal event listener acti
     interval: () => () => {},
     on() { listenerActive = true; listener = () => {}; return () => { listenerActive = false; }; },
   } as unknown as Context;
-  const worker = new YutangWorker(fakeCtx, runtime);
+  const worker = new YutangWorker(fakeCtx, runtime, await laneOf(runtime));
   const agent = {
     id: session.id,
     session,

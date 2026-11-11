@@ -9,7 +9,7 @@ import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent';
 import type { MentionInboxEvent } from '@dsh-im/client';
 import { buildBrowseTaskPrompt, buildJuryTaskPrompt, WORKER_ISOLATED_SYSTEM_PROMPT, WORKER_TASK_PROMPT } from './prompt.js';
 import { formatMessages } from '../tools/format.js';
-import { activeConnection } from '../storage/state.js';
+import type { ServerConnectionState, YutangState } from '../storage/state.js';
 import type { YutangRuntime, WorkerTaskSource } from '../service/runtime.js';
 
 const TASK_TIMEOUT_MS = 10 * 60_000;
@@ -22,17 +22,24 @@ type TaskOutcome = { processed: true; replyMessageId?: string };
 type PendingJuryAssignment = { caseId: string; assignmentId: string; deadlineAt: string; serverId: string; assignmentSource: 'active_request' | 'background' };
 const utcDateKey = (value = new Date()) => value.toISOString().slice(0, 10);
 
+/** One worker lane = one bound DSH Session acting as one Yutang Connection. */
+export type WorkerLane = { sessionId: string; connectionId: string };
+
+export const laneKeyOf = (lane: WorkerLane) => `${lane.connectionId}\u0000${lane.sessionId}`;
+
+/**
+ * A single background worker loop. Every lane owns its own realtime socket, task slot,
+ * jury queue and mention inbox, so multiple bound Sessions never contend for one worker.
+ */
 export class YutangWorker {
-  private selectedSessionId: string | undefined;
   private taskAgent: Agent | undefined;
   private readonly stopInterval: () => void;
   private readonly stopEvents: () => void;
+  private readonly stopSettingsWatch: () => void;
   private readonly activeTurns = new Map<string, (turn: number, result: TurnResult) => void>();
   private taskRunning = false;
   private tickInProgress = false;
   private tickRequested = false;
-  private switchingServer = false;
-  private pendingServerId: string | undefined;
   private pollInProgress = false;
   private inboxClaimRunning = false;
   private activeTaskSource: WorkerTaskSource | undefined;
@@ -43,6 +50,7 @@ export class YutangWorker {
   private lastHeartbeatAckAt = 0;
   private inboxSubscriptionEnabled = false;
   private jurySubscriptionEnabled = false;
+  private activeJurySubscriptionEnabled = false;
   private readonly pendingJuryAssignments = new Map<string, PendingJuryAssignment>();
   private readonly completedJuryAssignments = new Map<string, number>();
   private readonly juryRetryAt = new Map<string, number>();
@@ -54,7 +62,7 @@ export class YutangWorker {
   private lastWorkerError: string | undefined;
   private boundServerId: string | undefined;
 
-  constructor(private readonly ctx: Context, private readonly runtime: YutangRuntime) {
+  constructor(private readonly ctx: Context, private readonly runtime: YutangRuntime, public readonly lane: WorkerLane) {
     this.stopEvents = ctx.on('session/event', (session, event) => {
       if (event.type !== 'turn/end') return;
       const settle = this.activeTurns.get(session.id);
@@ -63,29 +71,31 @@ export class YutangWorker {
       else settle(event.data.turn, { kind: 'failed', reason: event.data.reason.kind });
     });
     this.stopInterval = ctx.interval(() => { void this.tick().catch(error => this.noteError(error)); }, 30_000);
-    runtime.setBeforeServerSwitchHandler(nextServerId => this.prepareServerSwitch(nextServerId));
-    runtime.setSettingsChangedHandler(async () => {
-      const state = await runtime.state();
-      if (this.switchingServer && activeConnection(state).id === this.pendingServerId) {
-        this.switchingServer = false;
-        this.pendingServerId = undefined;
-      }
-      const taskDisabled = !state.settings.scheduled_session_id || (this.activeTaskSource === 'browse'
-        ? !['auto', 'lurk'].includes(state.settings.social_mode) || state.settings.browse_schedule_mode === 'off'
-        : this.activeTaskSource === 'mention'
-          ? state.settings.social_mode !== 'auto' || !state.settings.mention_wakeup_enabled
-          : this.activeTaskSource === 'jury'
-            ? state.settings.social_mode === 'off'
-            : state.settings.social_mode === 'off');
-      if (taskDisabled) {
-        this.stopActiveMentionLease?.();
-        if (this.taskAgent?.status === 'running') this.taskAgent.cancel({ kind: 'hook', reason: 'Yutang automation settings changed' });
-      }
-      await this.reconcileRealtime();
-      await this.tick();
-    });
-    runtime.setWorkerStatusReader(() => this.status());
+    this.stopSettingsWatch = runtime.onSettingsChanged(() => this.applySettingsChange());
   }
+
+  /**
+   * Switch changes and binding edits arrive for every lane, not only for the supervisor, so a
+   * running task is cancelled the moment its own Session loses the permission to run.
+   */
+  private async applySettingsChange() {
+    if (this.stopped) return;
+    try {
+      await this.reconcileRealtime();
+      const { state, binding, connection } = await this.bindingState();
+      const source = this.activeTaskSource;
+      const disabled = !binding || !connection
+        || state.settings.social_mode === 'off'
+        || source === 'mention' && (state.settings.social_mode !== 'auto' || !binding.mention_wakeup_enabled)
+        || source === 'browse' && !['auto', 'lurk'].includes(state.settings.social_mode)
+        || source === 'jury' && !state.settings.jury_worker_enabled;
+      if (disabled && this.taskAgent?.status === 'running') this.taskAgent.cancel({ kind: 'hook', reason: 'Yutang worker disabled by settings' });
+    } catch (error) { this.noteError(error); }
+  }
+
+  get key() { return laneKeyOf(this.lane); }
+  get sessionId() { return this.lane.sessionId; }
+  get connectionId() { return this.lane.connectionId; }
 
   async start() {
     await this.reconcileRealtime();
@@ -94,28 +104,45 @@ export class YutangWorker {
 
   status() {
     return {
-      worker: this.taskRunning ? 'running' : this.selectedSessionId ? 'ready' : 'stopped',
+      worker: this.taskRunning ? 'running' : this.stopped ? 'stopped' : 'ready',
       realtime: this.socket?.readyState === WebSocket.OPEN ? 'connected' : 'disconnected',
       last_error: this.lastWorkerError,
     };
   }
 
+  /** Re-evaluate settings without re-pointing the lane. */
+  async refresh() {
+    await this.tick();
+  }
+
+  /** Called by the supervisor whenever state settings changed; may re-point this lane. */
+  async onBindingChanged(next: WorkerLane) {
+    if (next.connectionId === this.lane.connectionId && next.sessionId === this.lane.sessionId) {
+      await this.tick();
+      return;
+    }
+    (this.lane as WorkerLane).sessionId = next.sessionId;
+    (this.lane as WorkerLane).connectionId = next.connectionId;
+    await this.resetRealtime();
+    await this.reconcileRealtime();
+    await this.tick();
+  }
+
   async dispose() {
     this.stopped = true;
     this.stopInterval();
-    this.runtime.setSettingsChangedHandler(() => {});
-    this.runtime.setBeforeServerSwitchHandler(() => {});
-    this.runtime.setWorkerStatusReader(() => ({ worker: 'stopped', realtime: 'disconnected' }));
     this.stopActiveMentionLease?.();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = undefined;
     this.stopHeartbeat();
     this.socket?.close(1000, 'plugin disposed');
     this.socket = undefined;
-    this.selectedSessionId = undefined;
     if (this.taskAgent?.status === 'running') {
       this.taskAgent.cancel({ kind: 'hook', reason: 'Yutang plugin disposed' });
       await this.taskAgent.whenIdle().catch(() => {});
     }
+    await this.connectionAttempt.catch(() => {});
+    this.stopSettingsWatch();
     this.stopEvents();
   }
 
@@ -125,45 +152,47 @@ export class YutangWorker {
     this.runtime.logWarn('Worker error', this.lastWorkerError);
   }
 
-  private async prepareServerSwitch(nextServerId: string) {
-    this.switchingServer = true;
-    this.pendingServerId = nextServerId;
-    this.lastWorkerError = undefined;
+  /** The Connection this lane is bound to; `undefined` means the Connection disappeared. */
+  private connectionOf(state: YutangState): ServerConnectionState | undefined {
+    return state.servers.find(server => server.id === this.lane.connectionId);
+  }
+
+  /** Per-session automation switches live on the binding; account-wide switches stay global. */
+  private async bindingState() {
+    const state = await this.runtime.state();
+    const binding = state.session_bindings[this.lane.sessionId];
+    return { state, binding, connection: binding ? state.servers.find(server => server.id === binding.connection_id) : undefined };
+  }
+
+  private async resetRealtime() {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
-    this.stopActiveMentionLease?.();
-    this.selectedSessionId = undefined;
-    this.boundServerId = undefined;
+    this.stopHeartbeat();
     this.realtimeAttemptController?.abort();
     this.realtimeAttemptController = undefined;
-    this.stopHeartbeat();
-    this.socket?.close(1000, 'server connection switched');
+    this.socket?.close(1000, 'worker lane rebound');
     this.socket = undefined;
+    this.inboxSubscriptionEnabled = false;
+    this.jurySubscriptionEnabled = false;
+    this.activeJurySubscriptionEnabled = false;
+    this.stopActiveMentionLease?.();
+    this.boundServerId = undefined;
     if (this.taskAgent?.status === 'running') {
-      this.taskAgent.cancel({ kind: 'hook', reason: 'Yutang server connection switched' });
+      this.taskAgent.cancel({ kind: 'hook', reason: 'Yutang worker lane rebound' });
       if (typeof this.taskAgent.whenIdle === 'function') await this.taskAgent.whenIdle().catch(() => {});
     }
     await this.connectionAttempt.catch(() => {});
   }
 
   private async reconcileRealtime() {
-    if (this.stopped || this.switchingServer) return;
-    const state = await this.runtime.state();
-    const connection = activeConnection(state);
+    if (this.stopped) return;
+    const { state, binding, connection } = await this.bindingState();
+    if (!binding || !connection) {
+      if (this.boundServerId) await this.resetRealtime();
+      return;
+    }
     if (this.boundServerId !== connection.id) {
-      if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = undefined;
-      this.stopHeartbeat();
-      this.socket?.close(1000, 'server connection switched');
-      this.socket = undefined;
-      this.inboxSubscriptionEnabled = false;
-      this.jurySubscriptionEnabled = false;
-      this.stopActiveMentionLease?.();
-      this.selectedSessionId = undefined;
-      if (this.taskAgent?.status === 'running') {
-        this.taskAgent.cancel({ kind: 'hook', reason: 'Yutang server connection switched' });
-        if (typeof this.taskAgent.whenIdle === 'function') await this.taskAgent.whenIdle().catch(() => {});
-      }
+      await this.resetRealtime();
       this.boundServerId = connection.id;
     }
     if (!connection.identity || state.settings.social_mode === 'off') {
@@ -176,9 +205,9 @@ export class YutangWorker {
       this.reconnectTimer = undefined;
       return;
     }
-    const inboxEnabled = state.settings.social_mode === 'auto' && state.settings.mention_wakeup_enabled && Boolean(state.settings.scheduled_session_id);
-    const juryEnabled = state.settings.social_mode === 'auto' && state.settings.jury_worker_enabled && Boolean(state.settings.scheduled_session_id);
-    const activeJuryEnabled = connection.active_jury_request_day === utcDateKey() && Boolean(state.settings.scheduled_session_id);
+    const inboxEnabled = state.settings.social_mode === 'auto' && binding.mention_wakeup_enabled;
+    const juryEnabled = state.settings.social_mode === 'auto' && state.settings.jury_worker_enabled;
+    const activeJuryEnabled = connection.active_jury_request_day === utcDateKey();
     if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING) && this.inboxSubscriptionEnabled === inboxEnabled && this.jurySubscriptionEnabled === juryEnabled && this.activeJurySubscriptionEnabled === activeJuryEnabled) return;
     if (this.socket) {
       this.stopHeartbeat();
@@ -189,14 +218,12 @@ export class YutangWorker {
     }
     try { await this.connectRealtime(connection.id, inboxEnabled, juryEnabled, activeJuryEnabled); }
     catch (error) {
-      if (!this.stopped && !this.switchingServer) {
+      if (!this.stopped) {
         if (!(error instanceof DOMException && error.name === 'AbortError')) this.noteError(error);
         this.scheduleReconnect();
       }
     }
   }
-
-  private activeJurySubscriptionEnabled = false;
 
   private async connectRealtime(serverId: string, inboxEnabled: boolean, juryEnabled: boolean, activeJuryEnabled: boolean) {
     if (this.reconnectInProgress || this.stopped) return;
@@ -204,17 +231,17 @@ export class YutangWorker {
     const controller = new AbortController();
     this.realtimeAttemptController = controller;
     const attempt = (async () => {
-      const api = await this.runtime.apiForCurrentAgent(serverId, controller.signal);
+      const api = await this.runtime.apiForSession(this.lane.sessionId, serverId, controller.signal);
       const { data } = await api.createRealtimeTicket({ signal: controller.signal });
       if (controller.signal.aborted) return;
-      if (activeConnection(await this.runtime.state()).id !== serverId || this.boundServerId !== serverId) return;
+      if (this.boundServerId !== serverId) return;
       const url = new URL('/v1/realtime', api.baseUrl);
       url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
       url.searchParams.set('ticket', data.ticket);
       const socket = new WebSocket(url);
       this.socket = socket;
       socket.addEventListener('open', () => {
-        if (this.socket !== socket || this.boundServerId !== serverId) { socket.close(1000, 'server connection switched'); return; }
+        if (this.socket !== socket || this.boundServerId !== serverId) { socket.close(1000, 'worker lane rebound'); return; }
         this.reconnectAttempt = 0;
         if (this.lastWorkerError && /(?:ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|UND_ERR_SOCKET|UND_ERR_CONNECT_TIMEOUT|connection refused|network error)/iu.test(this.lastWorkerError)) {
           this.lastWorkerError = undefined;
@@ -222,7 +249,7 @@ export class YutangWorker {
         this.inboxSubscriptionEnabled = inboxEnabled;
         this.jurySubscriptionEnabled = juryEnabled;
         this.activeJurySubscriptionEnabled = activeJuryEnabled;
-        this.runtime.logInfo('Realtime connection opened', { server_id: serverId });
+        this.runtime.logInfo('Realtime connection opened', { server_id: serverId, session_id: this.lane.sessionId });
         this.lastHeartbeatAckAt = Date.now();
         socket.send(JSON.stringify({ type: 'subscribe', inbox: inboxEnabled, jury: juryEnabled, active_jury: activeJuryEnabled }));
         this.heartbeatTimer = setInterval(() => {
@@ -265,7 +292,7 @@ export class YutangWorker {
   }
 
   private scheduleReconnect() {
-    if (this.stopped || this.switchingServer || this.reconnectTimer) return;
+    if (this.stopped || this.reconnectTimer) return;
     this.stopHeartbeat();
     this.socket = undefined;
     const delay = Math.min(30_000, 1_000 * 2 ** Math.min(this.reconnectAttempt++, 5));
@@ -282,31 +309,31 @@ export class YutangWorker {
 
   private async tick() {
     if (this.tickInProgress) { this.tickRequested = true; return; }
-    if (this.stopped || this.switchingServer || this.taskRunning) return;
+    if (this.stopped || this.taskRunning) return;
     this.tickInProgress = true;
     try {
-      let state = await this.runtime.state();
-      const connection = activeConnection(state);
+      let { state, binding, connection } = await this.bindingState();
+      if (!binding || !connection) return;
+      this.lane.connectionId = connection.id;
       const activeJuryRequested = connection.active_jury_request_day === utcDateKey();
-      if (!connection.identity || !state.settings.scheduled_session_id || (!['auto', 'lurk'].includes(state.settings.social_mode) && !(activeJuryRequested && state.settings.social_mode !== 'off'))) return;
+      if (!connection.identity) return;
       await this.reconcileRealtime();
       if (state.settings.social_mode !== 'off' && (state.settings.social_mode === 'auto' && state.settings.jury_worker_enabled || activeJuryRequested)) {
-        const serverId = connection.id;
-        await this.refreshJuryAssignments(serverId);
+        await this.refreshJuryAssignments(connection.id);
         await this.processJuryQueue();
       }
       if (!['auto', 'lurk'].includes(state.settings.social_mode)) return;
-      if (!this.taskRunning && state.settings.social_mode === 'auto' && state.settings.mention_wakeup_enabled) await this.claimInbox();
+      if (!this.taskRunning && state.settings.social_mode === 'auto' && binding.mention_wakeup_enabled) await this.claimInbox();
       if (this.taskRunning) return;
-      state = await this.runtime.state();
-      if (!activeConnection(state).identity || !['auto', 'lurk'].includes(state.settings.social_mode) || !state.settings.scheduled_session_id) return;
+      ({ state, binding, connection } = await this.bindingState());
+      if (!binding || !connection?.identity || !['auto', 'lurk'].includes(state.settings.social_mode)) return;
       const now = Date.now();
-      const serverId = activeConnection(state).id;
-      if (state.settings.browse_schedule_mode === 'hourly' && await this.runtime.store.claimHourlyBrowse(serverId, now)) {
+      const serverId = connection.id;
+      if (binding.browse_schedule_mode === 'hourly' && await this.runtime.store.claimHourlyBrowse(serverId, now)) {
         await this.pollChannels(serverId);
-      } else if (state.settings.browse_schedule_mode === 'daily' && await this.runtime.store.claimDailyBrowse(serverId, now, state.settings.daily_browse_time)) {
+      } else if (binding.browse_schedule_mode === 'daily' && await this.runtime.store.claimDailyBrowse(serverId, now, binding.daily_browse_time)) {
         await this.pollChannels(serverId);
-      } else if (state.settings.browse_schedule_mode === 'curiosity') {
+      } else if (binding.browse_schedule_mode === 'curiosity') {
         const roll = await this.runtime.store.rollCuriosityIfDue(serverId, now, randomInt(1, 11));
         if (roll.rolled) this.runtime.logInfo('Curiosity die rolled', { server_id: serverId, value: roll.value, points: roll.points, triggered: roll.triggered });
         if (roll.rolled && roll.triggered) await this.pollChannels(serverId);
@@ -326,15 +353,14 @@ export class YutangWorker {
   }
 
   private async refreshJuryAssignments(expectedServerId: string) {
-    const state = await this.runtime.state();
-    const connection = activeConnection(state);
+    const { state, binding, connection } = await this.bindingState();
+    if (!binding || !connection) return;
     const activeRequested = connection.active_jury_request_day === utcDateKey();
     const backgroundEnabled = state.settings.social_mode === 'auto' && state.settings.jury_worker_enabled;
-    if (this.switchingServer || connection.id !== expectedServerId || state.settings.social_mode === 'off'
-      || (!backgroundEnabled && !activeRequested) || !state.settings.scheduled_session_id) return;
-    const api = await this.runtime.apiForCurrentAgent(expectedServerId);
+    if (connection.id !== expectedServerId || state.settings.social_mode === 'off' || (!backgroundEnabled && !activeRequested)) return;
+    const api = await this.runtime.apiForSession(this.lane.sessionId, expectedServerId);
     const response = await api.listModerationAssignments();
-    if (activeConnection(await this.runtime.state()).id !== expectedServerId) return;
+    if (this.lane.connectionId !== expectedServerId) return;
     const now = Date.now();
     for (const [assignmentId, expiresAt] of this.completedJuryAssignments) if (expiresAt <= now) this.completedJuryAssignments.delete(assignmentId);
     for (const item of response.data) {
@@ -353,9 +379,9 @@ export class YutangWorker {
   }
 
   private async processJuryQueue(): Promise<boolean> {
-    if (this.taskRunning || this.switchingServer || this.stopped) return false;
-    const state = await this.runtime.state();
-    const connection = activeConnection(state);
+    if (this.taskRunning || this.stopped) return false;
+    const { state, binding, connection } = await this.bindingState();
+    if (!binding || !connection) return false;
     const activeRequested = connection.active_jury_request_day === utcDateKey();
     const backgroundEnabled = state.settings.social_mode === 'auto' && state.settings.jury_worker_enabled;
     const now = Date.now();
@@ -377,21 +403,19 @@ export class YutangWorker {
     return true;
   }
 
-  private async ensureSelectedSession(): Promise<string> {
-    const state = await this.runtime.state();
-    const sessionId = state.settings.scheduled_session_id;
-    if (!sessionId) throw new Error('请先在鱼塘设置中选择运行定时任务的 DSH 会话。');
+  private async ensureBoundSession(): Promise<string> {
+    const { binding } = await this.bindingState();
+    if (!binding) throw new Error('该 DSH 会话已解除鱼塘身份绑定，已跳过后台任务。');
+    const sessionId = this.lane.sessionId;
     const id = SessionId(sessionId);
     const snapshot = await this.ctx.sessionPersistence.stat(id);
-    if (!snapshot || snapshot.header.origin === 'subagent') throw new Error('所选 DSH 会话已不存在或不可用于定时任务。');
+    if (!snapshot || snapshot.header.origin === 'subagent') throw new Error('绑定的 DSH 会话已不存在或不可用于后台任务。');
     const live = this.ctx.agents.get(id);
-    if (live?.status === 'running') throw new Error('所选 DSH 会话当前正在运行，定时任务稍后重试。');
-    this.selectedSessionId = sessionId;
+    if (live?.status === 'running') throw new Error('绑定的 DSH 会话当前正在运行，后台任务稍后重试。');
     return sessionId;
   }
 
   private async runTask(taskId: string, channelId: string, source: WorkerTaskSource, prompt: string, expectedServerId?: string, assignmentId?: string, assignmentSource?: 'active_request' | 'background'): Promise<TaskOutcome> {
-    if (this.switchingServer) throw new Error('Server 连接切换中，已暂停后台任务。');
     if (this.taskRunning) throw new Error('worker task is already active');
     this.taskRunning = true;
     let agent: Agent | undefined;
@@ -400,7 +424,7 @@ export class YutangWorker {
     let turnTimeout: ReturnType<typeof setTimeout> | undefined;
     let releaseGrant = () => {};
     try {
-      const selectedSessionId = await this.ensureSelectedSession();
+      const selectedSessionId = await this.ensureBoundSession();
       handle = await this.ctx.agents.create({
         sessionId: SessionId(`yutang-worker-${randomUUID()}`),
         meta: { origin: 'subagent', parentSession: SessionId(selectedSessionId) },
@@ -413,21 +437,20 @@ export class YutangWorker {
       agentId = String(agent.id);
       this.taskAgent = agent;
       this.activeTaskSource = source;
-      const state = await this.runtime.state();
-      const connection = activeConnection(state);
+      const { state, binding, connection } = await this.bindingState();
+      if (!binding || !connection) throw new Error('该 DSH 会话已解除鱼塘身份绑定，已丢弃当前任务。');
       if (expectedServerId !== undefined && connection.id !== expectedServerId) throw new Error('Server 连接已切换，已丢弃旧连接任务。');
-      if (state.settings.scheduled_session_id !== selectedSessionId) throw new Error('定时会话已更改，已跳过当前任务。');
       const settings = state.settings;
-      if (source === 'browse' && (!['auto', 'lurk'].includes(settings.social_mode) || settings.browse_schedule_mode === 'off')
-        || source === 'mention' && (settings.social_mode !== 'auto' || !settings.mention_wakeup_enabled)
+      if (source === 'browse' && (!['auto', 'lurk'].includes(settings.social_mode) || binding.browse_schedule_mode === 'off')
+        || source === 'mention' && (settings.social_mode !== 'auto' || !binding.mention_wakeup_enabled)
         || source === 'jury' && (!assignmentId || settings.social_mode === 'off'
           || assignmentSource === 'active_request' && connection.active_jury_request_day !== utcDateKey()
           || assignmentSource === 'background' && (settings.social_mode !== 'auto' || !settings.jury_worker_enabled))) {
         throw new Error('worker task disabled by current settings');
       }
       releaseGrant = source === 'jury'
-        ? this.runtime.beginWorkerJuryTask(agentId, taskId, channelId, assignmentId!, connection.id)
-        : this.runtime.beginWorkerTask(agentId, taskId, channelId, source, connection.id);
+        ? this.runtime.beginWorkerJuryTask(agentId, taskId, channelId, assignmentId!, connection.id, selectedSessionId)
+        : this.runtime.beginWorkerTask(agentId, taskId, channelId, source, connection.id, selectedSessionId);
       const expectedTurn = this.ctx.agents.turnBoundaryOf(agent.session).lastTurn + 1;
       const result = new Promise<TurnResult>((resolve, reject) => {
         turnTimeout = setTimeout(() => {
@@ -471,8 +494,6 @@ export class YutangWorker {
   private async recordTaskSummary(sessionId: string, source: WorkerTaskSource, channelId: string, replyMessageId?: string) {
     let handle: AgentHandle | undefined;
     try {
-      const state = await this.runtime.state();
-      if (state.settings.scheduled_session_id !== sessionId) return;
       const id = SessionId(sessionId);
       const live = this.ctx.agents.get(id);
       if (live?.status === 'running') return;
@@ -497,33 +518,34 @@ export class YutangWorker {
   }
 
   private async pollChannels(expectedServerId?: string) {
-    if (this.switchingServer || this.pollInProgress || this.taskRunning) return;
+    if (this.pollInProgress || this.taskRunning) return;
     this.pollInProgress = true;
     try {
-      const initialState = await this.runtime.state();
-      const serverId = activeConnection(initialState).id;
+      const initial = await this.bindingState();
+      if (!initial.binding || !initial.connection) return;
+      const serverId = initial.connection.id;
       if (expectedServerId !== undefined && expectedServerId !== serverId) return;
-      const api = await this.runtime.apiForCurrentAgent(serverId);
+      const api = await this.runtime.apiForSession(this.lane.sessionId, serverId);
       const response = await api.listMyChannels();
-      if (activeConnection(await this.runtime.state()).id !== serverId) return;
+      if ((await this.bindingState()).connection?.id !== serverId) return;
       const channels = response.data;
-      const currentConnection = activeConnection(await this.runtime.state());
+      const currentConnection = (await this.bindingState()).connection;
+      if (!currentConnection) return;
       const cursorIndex = channels.findIndex(channel => channel.id === currentConnection.browse_channel_cursor_id);
       const startIndex = cursorIndex < 0 ? 0 : (cursorIndex + 1) % Math.max(1, channels.length);
       const rotatedChannels = channels.length ? [...channels.slice(startIndex), ...channels.slice(0, startIndex)] : [];
       const scanBatch = rotatedChannels.slice(0, MAX_BROWSE_CHANNELS_PER_CYCLE);
       for (const channel of scanBatch) {
         if (this.taskRunning || this.stopped) break;
-        const state = await this.runtime.state();
-        if (activeConnection(state).id !== serverId || !['auto', 'lurk'].includes(state.settings.social_mode) || state.settings.browse_schedule_mode === 'off') break;
-        const connection = activeConnection(state);
+        const { state, binding, connection } = await this.bindingState();
+        if (!binding || !connection || connection.id !== serverId || !['auto', 'lurk'].includes(state.settings.social_mode) || binding.browse_schedule_mode === 'off') break;
         const cursor = connection.read_cursors[channel.id] ?? 0;
         if (channel.latest_seq <= cursor) {
           await this.runtime.store.updateConnection(connection.id, { browse_channel_cursor_id: channel.id });
           continue;
         }
         const batch = await api.listMessages(channel.id, { afterSeq: cursor, limit: 25 });
-        if (activeConnection(await this.runtime.state()).id !== serverId) break;
+        if ((await this.bindingState()).connection?.id !== serverId) break;
         const messages = batch.data;
         const nextCursor = messages.reduce((max, message) => Math.max(max, message.channel_seq), cursor);
         const ownMessages = messages.filter(message => message.sender.id !== connection.identity?.agent_id);
@@ -561,20 +583,20 @@ export class YutangWorker {
   }
 
   private async claimInbox() {
-    if (this.switchingServer || this.taskRunning || this.inboxClaimRunning || this.stopped) return;
+    if (this.taskRunning || this.inboxClaimRunning || this.stopped) return;
     this.inboxClaimRunning = true;
     try {
-      const state = await this.runtime.state();
-      if (!activeConnection(state).identity || state.settings.social_mode !== 'auto' || !state.settings.mention_wakeup_enabled || !state.settings.scheduled_session_id) return;
-      const serverId = activeConnection(state).id;
-      const api = await this.runtime.apiForCurrentAgent(serverId);
+      const { state, binding, connection } = await this.bindingState();
+      if (!binding || !connection?.identity || state.settings.social_mode !== 'auto' || !binding.mention_wakeup_enabled) return;
+      const serverId = connection.id;
+      const api = await this.runtime.apiForSession(this.lane.sessionId, serverId);
       const { data: events } = await api.claimInbox({ max_events: 5, lease_seconds: 600 });
-      if (activeConnection(await this.runtime.state()).id !== serverId) {
+      if ((await this.bindingState()).connection?.id !== serverId) {
         await Promise.all(events.map(event => api.completeInboxEvent(event.id, { lease_token: event.lease_token, result: 'skipped' }).catch(error => this.noteError(error))));
         return;
       }
       for (const event of events) {
-        if (this.taskRunning || this.stopped || activeConnection(await this.runtime.state()).id !== serverId) break;
+        if (this.taskRunning || this.stopped || (await this.bindingState()).connection?.id !== serverId) break;
         await this.processMention(api, event, serverId);
       }
     } finally {
@@ -582,7 +604,7 @@ export class YutangWorker {
     }
   }
 
-  private async processMention(api: Awaited<ReturnType<YutangRuntime['apiForCurrentAgent']>>, event: MentionInboxEvent, expectedServerId?: string) {
+  private async processMention(api: Awaited<ReturnType<YutangRuntime['apiForSession']>>, event: MentionInboxEvent, expectedServerId?: string) {
     let renewTimer: ReturnType<typeof setInterval> | undefined;
     const leaseAbort = new AbortController();
     const stopRenewal = () => {
@@ -592,12 +614,12 @@ export class YutangWorker {
       if (this.stopActiveMentionLease === stopRenewal) this.stopActiveMentionLease = undefined;
     };
     try {
-      const current = await this.runtime.state();
-      if (expectedServerId !== undefined && activeConnection(current).id !== expectedServerId) {
+      const current = await this.bindingState();
+      if (expectedServerId !== undefined && current.connection?.id !== expectedServerId) {
         await api.completeInboxEvent(event.id, { lease_token: event.lease_token, result: 'skipped' });
         return;
       }
-      if (current.settings.social_mode !== 'auto' || !current.settings.mention_wakeup_enabled) {
+      if (current.state.settings.social_mode !== 'auto' || !current.binding?.mention_wakeup_enabled) {
         await api.completeInboxEvent(event.id, { lease_token: event.lease_token, result: 'skipped' });
         return;
       }
@@ -614,8 +636,8 @@ export class YutangWorker {
     } catch (error) {
       let result: 'skipped' | 'failed' = 'failed';
       try {
-        const current = await this.runtime.state();
-        if (expectedServerId !== undefined && activeConnection(current).id !== expectedServerId || current.settings.social_mode !== 'auto' || !current.settings.mention_wakeup_enabled) result = 'skipped';
+        const current = await this.bindingState();
+        if (expectedServerId !== undefined && current.connection?.id !== expectedServerId || current.state.settings.social_mode !== 'auto' || !current.binding?.mention_wakeup_enabled) result = 'skipped';
       } catch (stateError) { this.noteError(stateError); }
       if (result === 'failed') this.noteError(error);
       await api.completeInboxEvent(event.id, { lease_token: event.lease_token, result }).catch(completeError => this.noteError(completeError));

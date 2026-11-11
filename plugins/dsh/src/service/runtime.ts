@@ -2,7 +2,7 @@ import { createHash, generateKeyPairSync, createPrivateKey, sign } from 'node:cr
 import { resolve } from 'node:path';
 import { credentialKey, type CredentialKey, type CredentialProvider } from '@deepseek-ai/dsh-credentials';
 import { ApiError, YutangApi } from '@dsh-im/client';
-import { activeConnection, bindingOf, type IdentityState, type PendingRegistrationState, type PluginSettings, type ServerConnectionState, type StateStore, type YutangState } from '../storage/state.js';
+import { activeConnection, bindingOf, connectionForSession, type IdentityState, type PendingRegistrationState, type PluginSettings, type ServerConnectionState, type StateStore, type YutangState } from '../storage/state.js';
 import { normalizeServerUrl } from '../config.js';
 import { normalizeTurnLockAllowlist, YutangTurnToolLock } from '../security/tool-lock.js';
 
@@ -11,15 +11,15 @@ export interface PluginLogEntry { id: number; time: number; level: LogLevel; mes
 export interface LoggerLike { debug?: (...args: unknown[]) => void; info?: (...args: unknown[]) => void; warn?: (...args: unknown[]) => void; error?: (...args: unknown[]) => void; list?: (limit?: number) => PluginLogEntry[] }
 
 export type WorkerTaskSource = 'mention' | 'browse' | 'jury';
-type WorkerSendGrant = { kind: 'channel'; taskId: string; channelId: string; source: 'mention' | 'browse'; serverId?: string; remainingSends: number; replyMessageId?: string };
-type WorkerJuryGrant = { kind: 'jury'; taskId: string; caseId: string; assignmentId: string; serverId: string };
+type WorkerSendGrant = { kind: 'channel'; taskId: string; channelId: string; source: 'mention' | 'browse'; serverId?: string; ownerSessionId?: string; remainingSends: number; replyMessageId?: string };
+type WorkerJuryGrant = { kind: 'jury'; taskId: string; caseId: string; assignmentId: string; serverId: string; ownerSessionId?: string };
 
 export class YutangRuntime {
   private socialPrompt = '';
   private promptChanged: (() => void) | undefined;
-  private settingsChanged: (() => void | Promise<void>) | undefined;
+  private readonly settingsListeners = new Set<() => void | Promise<void>>();
   private beforeServerSwitch: ((nextServerId: string) => void | Promise<void>) | undefined;
-  private workerStatusReader: (() => { worker: string; realtime: string; last_error?: string }) | undefined;
+  private workerStatusReader: (() => { worker: string; realtime: string; last_error?: string; lanes?: number }) | undefined;
   private readonly workerGrants = new Map<string, WorkerSendGrant | WorkerJuryGrant>();
   private readonly joinedSendChannels = new Map<string, { channelId: string; serverId: string }>();
   private readonly turnToolLock = new YutangTurnToolLock();
@@ -48,17 +48,28 @@ export class YutangRuntime {
       await this.storePrivateKey(connection.id, legacyPrivateKey);
       await this.store.update({ identity: connection.identity });
     }
+    await this.syncScheduledSessionBinding();
   }
   setPromptChangedHandler(handler: () => void) { this.promptChanged = handler; }
-  setSettingsChangedHandler(handler: () => void | Promise<void>) { this.settingsChanged = handler; }
+  /** Subscribe to settings changes; every worker lane needs its own reaction. */
+  onSettingsChanged(handler: () => void | Promise<void>) {
+    this.settingsListeners.add(handler);
+    return () => { this.settingsListeners.delete(handler); };
+  }
+  setSettingsChangedHandler(handler: () => void | Promise<void>) {
+    this.settingsListeners.clear();
+    if (handler) this.settingsListeners.add(handler);
+  }
   setBeforeServerSwitchHandler(handler: (nextServerId: string) => void | Promise<void>) { this.beforeServerSwitch = handler; }
   private async notifySettingsChanged() {
-    try { await this.settingsChanged?.(); }
-    catch (error) { this.logger.warn?.('dsh-yutang settings reconciliation failed', error); }
+    for (const listener of [...this.settingsListeners]) {
+      try { await listener(); }
+      catch (error) { this.logger.warn?.('dsh-yutang settings reconciliation failed', error); }
+    }
   }
   async refreshWorkerSettings() { await this.notifySettingsChanged(); }
-  setWorkerStatusReader(reader: () => { worker: string; realtime: string; last_error?: string }) { this.workerStatusReader = reader; }
-  workerStatus() { return this.workerStatusReader?.() ?? { worker: 'stopped', realtime: 'disconnected' }; }
+  setWorkerStatusReader(reader: () => { worker: string; realtime: string; last_error?: string; lanes?: number }) { this.workerStatusReader = reader; }
+  workerStatus() { return this.workerStatusReader?.() ?? { worker: 'stopped', realtime: 'disconnected', lanes: 0 }; }
   checkTurnToolLock(agentId: string | undefined, turn: number | undefined, toolName: string) {
     return this.turnToolLock.check(agentId, turn, toolName, this.turnLockAllowedTools);
   }
@@ -74,14 +85,24 @@ export class YutangRuntime {
       this.logger.warn?.('dsh-yutang could not remember the last used session', error);
     }
   }
-  beginWorkerTask(agentId: string, taskId: string, channelId: string, source: WorkerTaskSource, serverId?: string) {
+  beginWorkerTask(agentId: string, taskId: string, channelId: string, source: WorkerTaskSource, serverId?: string, ownerSessionId?: string) {
     if (source === 'jury') throw new Error('jury tasks require a case-bound grant');
-    this.workerGrants.set(agentId, { kind: 'channel', taskId, channelId, source, ...(serverId ? { serverId } : {}), remainingSends: 1 });
+    this.workerGrants.set(agentId, { kind: 'channel', taskId, channelId, source, ...(serverId ? { serverId } : {}), ...(ownerSessionId ? { ownerSessionId } : {}), remainingSends: 1 });
     return () => { this.workerGrants.delete(agentId); };
   }
-  beginWorkerJuryTask(agentId: string, taskId: string, caseId: string, assignmentId: string, serverId: string) {
-    this.workerGrants.set(agentId, { kind: 'jury', taskId, caseId, assignmentId, serverId });
+  beginWorkerJuryTask(agentId: string, taskId: string, caseId: string, assignmentId: string, serverId: string, ownerSessionId?: string) {
+    this.workerGrants.set(agentId, { kind: 'jury', taskId, caseId, assignmentId, serverId, ...(ownerSessionId ? { ownerSessionId } : {}) });
     return () => { this.workerGrants.delete(agentId); };
+  }
+  /**
+   * Resolve the DSH Session that owns a tool-calling agent.
+   * Background workers run in throwaway sub-sessions (`yutang-worker-*`) whose identity
+   * must be inherited from the bound Session that spawned them, otherwise the call
+   * would silently fall back to the profile-wide `active_server_id`.
+   */
+  sessionIdFor(sessionId: string | undefined) {
+    if (!sessionId) return undefined;
+    return this.workerGrants.get(sessionId)?.ownerSessionId ?? sessionId;
   }
   workerSendAllowed(agentId: string | undefined, channelId: string, serverId?: string) {
     if (!agentId) return false;
@@ -248,10 +269,17 @@ export class YutangRuntime {
    */
   async apiForSession(sessionId: string | undefined, expectedServerId?: string, signal?: AbortSignal): Promise<YutangApi> {
     signal?.throwIfAborted();
-    const binding = bindingOf(await this.store.load(), sessionId);
+    const ownerSessionId = this.sessionIdFor(sessionId);
+    const binding = bindingOf(await this.store.load(), ownerSessionId);
     if (!binding) return this.apiForCurrentAgent(expectedServerId, signal);
     if (expectedServerId !== undefined && binding.connection_id !== expectedServerId) throw new ApiError('Server 连接已切换，请重试当前操作。');
     return this.apiForConnection(binding.connection_id, signal);
+  }
+
+  /** Connection a tool-calling agent must act against, resolved through its owning Session. */
+  async connectionIdForSession(sessionId: string | undefined): Promise<string> {
+    const state = await this.store.load();
+    return connectionForSession(state, this.sessionIdFor(sessionId)).id;
   }
 
   async apiForCurrentAgent(expectedServerId?: string, signal?: AbortSignal): Promise<YutangApi> {
@@ -424,8 +452,33 @@ export class YutangRuntime {
     this.turnLockAllowedTools = [...result.tool_lock_allowed_tools];
     this.socialPrompt = this.renderPrompt(result);
     this.promptChanged?.();
+    await this.syncScheduledSessionBinding();
     void this.notifySettingsChanged();
     return result;
+  }
+
+  /**
+   * Bridge the legacy profile-wide switches onto the per-Session binding table.
+   *
+   * A Session picked as `scheduled_session_id` gets its own binding so the worker can run as
+   * that identity. While the profile still owns a single binding, the global automation
+   * switches keep driving it; once several Sessions are bound, each one tunes itself.
+   */
+  private async syncScheduledSessionBinding() {
+    const state = await this.store.load();
+    const sessionId = state.settings.scheduled_session_id;
+    if (!sessionId) return;
+    const patch = {
+      mention_wakeup_enabled: state.settings.mention_wakeup_enabled,
+      browse_schedule_mode: state.settings.browse_schedule_mode,
+      daily_browse_time: state.settings.daily_browse_time,
+    };
+    const existing = state.session_bindings[sessionId];
+    if (!existing) {
+      await this.store.bindSession(sessionId, activeConnection(state).id, patch);
+      return;
+    }
+    if (Object.keys(state.session_bindings).length === 1) await this.store.updateSessionBinding(sessionId, patch);
   }
 
   async updateProfile(displayName: string) {

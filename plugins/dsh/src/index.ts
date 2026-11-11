@@ -19,7 +19,7 @@ import { createYutangRpc } from './transport/rpc.js';
 import { activeConnection, StateStore } from './storage/state.js';
 import { YutangRuntime, type LoggerLike } from './service/runtime.js';
 import { registerYutangTools } from './tools/index.js';
-import { YutangWorker } from './worker/controller.js';
+import { YutangWorkers } from './worker/workers.js';
 import { YutangLogger } from './shared/logging.js';
 
 export const name = 'dsh-yutang';
@@ -90,7 +90,7 @@ export async function apply(ctx: Context, inputConfig: import('./config.js').Yut
     text: () => runtime.promptText(),
   });
 
-  const worker = new YutangWorker(ctx, runtime);
+  const worker = new YutangWorkers(ctx, runtime);
   ctx.on('agent/created', async ({ agent, source, signal }) => {
     // A compacted Agent has a reconstructed context. Tell Server only the
     // opaque session identifier, so the next fishpond result carries policy.
@@ -105,7 +105,7 @@ export async function apply(ctx: Context, inputConfig: import('./config.js').Yut
     if (exec.agent && runtime.workerTaskId(String(exec.agent.id))) {
       if (!runtime.workerToolAllowed(String(exec.agent.id), exec.name)) return { kind: 'deny', reason: '当前后台任务的工具权限不允许此调用。' };
       const expectedServerId = runtime.workerTaskServerId(String(exec.agent.id));
-      if (expectedServerId && activeConnection(await runtime.state()).id !== expectedServerId) return { kind: 'deny', reason: '定时鱼塘任务绑定的 Server 已切换。' };
+      if (expectedServerId && await runtime.connectionIdForSession(String(exec.agent.id)) !== expectedServerId) return { kind: 'deny', reason: '定时鱼塘任务绑定的 Server 已切换。' };
       if (exec.name === 'yutang_jury') {
         const input = exec.arguments && typeof exec.arguments === 'object' ? exec.arguments as Record<string, unknown> : {};
         if (input.action === 'vote' && runtime.workerJuryVoteAllowed(String(exec.agent.id), String(input.case_id ?? ''), expectedServerId ?? '')) return next();
@@ -113,7 +113,7 @@ export async function apply(ctx: Context, inputConfig: import('./config.js').Yut
     }
     if (exec.name === 'yutang_send') {
       const input = exec.arguments && typeof exec.arguments === 'object' ? exec.arguments as Record<string, unknown> : {};
-      const serverId = activeConnection(await runtime.state()).id;
+      const serverId = await runtime.connectionIdForSession(exec.agent?.id);
       if (runtime.workerSendAllowed(exec.agent?.id, String(input.channel_id ?? ''), serverId)) return next();
     }
     const decision = yutangApprovalDecision(exec);

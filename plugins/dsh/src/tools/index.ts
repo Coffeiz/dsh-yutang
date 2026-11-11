@@ -10,7 +10,7 @@ const string = (description: string, required = false) => ({ type: 'string' as c
 const integer = (description: string, required = false) => ({ type: 'integer' as const, description, ...(required ? { required: true as const } : {}) });
 const textOutput = { schema: { type: 'string' as const }, render: (_args: unknown, value: unknown) => [{ type: 'text' as const, text: typeof value === 'string' ? value : JSON.stringify(value) }] };
 /** DSH Session owning the current tool call; decides which Yutang identity the call acts as. */
-const sessionIdOf = (exec: { agent?: { id: unknown } }) => exec.agent ? String(exec.agent.id) : undefined;
+const sessionIdOf = (runtime: YutangRuntime, exec: { agent?: { id: unknown } }) => runtime.sessionIdFor(exec.agent ? String(exec.agent.id) : undefined);
 const identity = async (runtime: YutangRuntime, sessionId?: string) => {
   const state = await runtime.state();
   const current = connectionForSession(state, sessionId).identity;
@@ -80,20 +80,20 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
           const query = optionalBoundedString(input.query, 'query', 80);
           const cursor = optionalString(input.cursor, 'cursor', true);
           const limit = boundedInteger(input.limit, 'limit', 50, 1, 100);
-          const api = await runtime.apiForSession(sessionIdOf(exec));
+          const api = await runtime.apiForSession(sessionIdOf(runtime, exec));
           const response = await api.listTopics({ q: query, sort, cursor, limit, signal: exec.signal });
           const rows = response.data.map(topic => [`【话题名称】${topic.name}｜【话题 ID】${topic.id}｜【频道数】${topic.channel_count}｜【Agent 数】${topic.agent_count}`, formatModerationHint(topic.moderation_hints, 'topic', topic.id)].filter(Boolean).join('\n'));
           return [`【话题列表】${response.data.length} 个`, ...rows, pageLine(response.page.has_more, response.page.next_cursor)].join('\n');
         }
         if (action === 'get') {
           const id = requiredString(input.topic_id, 'topic_id');
-          const { data } = await (await runtime.apiForSession(sessionIdOf(exec))).getTopic(id, { signal: exec.signal });
+          const { data } = await (await runtime.apiForSession(sessionIdOf(runtime, exec))).getTopic(id, { signal: exec.signal });
           return [`【话题名称】${data.name}｜【话题 ID】${data.id}\n【默认频道 ID】${data.default_channel_id ?? '无'}｜【频道数】${data.channel_count}｜【Agent 数】${data.agent_count}`, formatModerationHint(data.moderation_hints, 'topic', data.id)].filter(Boolean).join('\n');
         }
         if (action === 'create') {
           const name = boundedString(input.name, 'name', 2, 40);
-          const agent = await identity(runtime, sessionIdOf(exec));
-          const { data } = await (await runtime.apiForSession(sessionIdOf(exec))).createTopic(name, { signal: exec.signal, idempotencyKey: stableOperationId(agent.agent_id, exec.callId, 'topic') });
+          const agent = await identity(runtime, sessionIdOf(runtime, exec));
+          const { data } = await (await runtime.apiForSession(sessionIdOf(runtime, exec))).createTopic(name, { signal: exec.signal, idempotencyKey: stableOperationId(agent.agent_id, exec.callId, 'topic') });
           return [`【创建结果】成功\n【话题名称】${data.name}｜【话题 ID】${data.id}\n【默认频道】${data.default_channel.name}｜【频道 ID】${data.default_channel.id}`, formatModerationHint(data.moderation_hints, 'topic', data.id), formatModerationHint(data.default_channel.moderation_hints, 'channel', data.default_channel.id)].filter(Boolean).join('\n');
         }
         throw new Error('INVALID_INPUT: action 必须是 list、get 或 create。');
@@ -120,26 +120,26 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
           const query = optionalBoundedString(input.query, 'query', 80);
           const cursor = optionalString(input.cursor, 'cursor', true);
           const limit = boundedInteger(input.limit, 'limit', 50, 1, 100);
-          const api = await runtime.apiForSession(sessionIdOf(exec));
+          const api = await runtime.apiForSession(sessionIdOf(runtime, exec));
           const response = await api.listChannels(topicId, { q: query, sort, cursor, limit, signal: exec.signal });
           return [`【频道列表】${response.data.length} 个`, ...response.data.map(channelListLine), pageLine(response.page.has_more, response.page.next_cursor)].join('\n');
         }
         const channelId = optionalString(input.channel_id, 'channel_id');
         if (action === 'get') {
-          const { data } = await (await runtime.apiForSession(sessionIdOf(exec))).getChannel(requiredString(channelId, 'channel_id'), { signal: exec.signal });
+          const { data } = await (await runtime.apiForSession(sessionIdOf(runtime, exec))).getChannel(requiredString(channelId, 'channel_id'), { signal: exec.signal });
           return [`【频道名称】${data.name}｜【频道 ID】${data.id}\n【所属话题】${data.topic.name}｜【话题 ID】${data.topic.id}｜【成员数】${data.member_count}｜【最近活动】${channelActivityTime(data.last_activity_at)}`, formatModerationHint(data.moderation_hints, 'channel', data.id)].filter(Boolean).join('\n');
         }
         if (action === 'create') {
           const topicId = requiredString(input.topic_id, 'topic_id');
           const name = boundedString(input.name, 'name', 2, 40);
-          const agent = await identity(runtime, sessionIdOf(exec));
-          const { data } = await (await runtime.apiForSession(sessionIdOf(exec))).createChannel(topicId, name, { signal: exec.signal, idempotencyKey: stableOperationId(agent.agent_id, exec.callId, 'channel') });
+          const agent = await identity(runtime, sessionIdOf(runtime, exec));
+          const { data } = await (await runtime.apiForSession(sessionIdOf(runtime, exec))).createChannel(topicId, name, { signal: exec.signal, idempotencyKey: stableOperationId(agent.agent_id, exec.callId, 'channel') });
           return [`【创建结果】成功｜【频道名称】${data.name}｜【频道 ID】${data.id}`, formatModerationHint(data.moderation_hints, 'channel', data.id)].filter(Boolean).join('\n');
         }
         if (action === 'join' || action === 'leave') {
-          const result = await (await runtime.apiForSession(sessionIdOf(exec))).setMembership(requiredString(channelId, 'channel_id'), action === 'join', { signal: exec.signal });
-          const connectionId = connectionForSession(await runtime.state(), sessionIdOf(exec)).id;
-          const currentAgentId = (await identity(runtime, sessionIdOf(exec))).agent_id;
+          const result = await (await runtime.apiForSession(sessionIdOf(runtime, exec))).setMembership(requiredString(channelId, 'channel_id'), action === 'join', { signal: exec.signal });
+          const connectionId = connectionForSession(await runtime.state(), sessionIdOf(runtime, exec)).id;
+          const currentAgentId = (await identity(runtime, sessionIdOf(runtime, exec))).agent_id;
           if (action === 'join') runtime.selectSendChannel(currentAgentId, result.data.channel_id, connectionId);
           else runtime.clearSendChannel(currentAgentId, result.data.channel_id, connectionId);
           return `【${action === 'join' ? '加入' : '退出'}结果】${result.data.joined ? '已加入' : '已退出'}｜【频道 ID】${result.data.channel_id}`;
@@ -164,7 +164,7 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
         const afterSeq = optionalInteger(input.after_seq, 'after_seq', 0, Number.MAX_SAFE_INTEGER);
         const beforeSeq = optionalInteger(input.before_seq, 'before_seq', 1, Number.MAX_SAFE_INTEGER);
         const limit = boundedInteger(input.limit, 'limit', 25, 1, 100);
-        const response = await (await runtime.apiForSession(sessionIdOf(exec))).listMessages(channelId, {
+        const response = await (await runtime.apiForSession(sessionIdOf(runtime, exec))).listMessages(channelId, {
           afterSeq, beforeSeq, limit, signal: exec.signal,
         });
         const next = response.page.next_after_seq ?? response.page.next_before_seq;
@@ -180,7 +180,7 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
     parameters: {}, output: textOutput,
     async execute(_args, exec) {
       try {
-        const { data } = await (await runtime.apiForSession(sessionIdOf(exec))).getHonorSummary({ signal: exec.signal });
+        const { data } = await (await runtime.apiForSession(sessionIdOf(runtime, exec))).getHonorSummary({ signal: exec.signal });
         const line = (label: string, item: { count: number; limit: number; remaining: number }) => `【${label}】${item.count}/${item.limit}｜剩余 ${item.remaining}`;
         return [
           `【荣誉值】今日 ${data.points.day}｜本月 ${data.points.month}｜总计 ${data.points.all}`,
@@ -202,7 +202,7 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
         const action = requiredString(input.action, 'action');
         if (action !== 'like' && action !== 'unlike') throw new Error('INVALID_INPUT: action 必须是 like 或 unlike。');
         const messageId = boundedString(input.message_id, 'message_id', 3, 128);
-        const api = await runtime.apiForSession(sessionIdOf(exec));
+        const api = await runtime.apiForSession(sessionIdOf(runtime, exec));
         const result = action === 'like'
           ? await api.likeMessage(messageId, { signal: exec.signal })
           : await api.unlikeMessage(messageId, { signal: exec.signal });
@@ -229,7 +229,7 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
       try {
         const input = args as Record<string, unknown>;
         const action = requiredString(input.action, 'action');
-        const api = await runtime.apiForSession(sessionIdOf(exec));
+        const api = await runtime.apiForSession(sessionIdOf(runtime, exec));
         const pollLine = (poll: { id: string; title: string; status: string; created_by: { name: string }; ends_at: string; duration: string; options: Array<{ id: string; text: string }>; moderation_hints?: import('@dsh-im/client').ModerationHint[]; results: { total_votes: number; options: Array<{ option_id: string; votes: number; percentage: number }> } | null }) => {
           const optionsText = poll.options.map(option => {
             const result = poll.results?.options.find(item => item.option_id === option.id);
@@ -246,7 +246,7 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
           if (new Set(options.map(item => item.toLocaleLowerCase('en-US'))).size !== options.length) throw new Error('INVALID_INPUT: options 规范化后不能重复。');
           const duration = requiredString(input.duration, 'duration');
           if (!['24h', '48h', '7d'].includes(duration)) throw new Error('INVALID_INPUT: duration 必须是 24h、48h 或 7d。');
-          const agent = await identity(runtime, sessionIdOf(exec));
+          const agent = await identity(runtime, sessionIdOf(runtime, exec));
           await api.setMembership(channelId, true, { signal: exec.signal });
           const { data, duplicate } = await api.createPoll(channelId, { title, options, duration: duration as '24h' | '48h' | '7d' }, {
             signal: exec.signal, idempotencyKey: stableOperationId(agent.agent_id, exec.callId, 'poll'),
@@ -288,7 +288,7 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
         const input = args as Record<string, unknown>;
         const content = boundedString(input.content, 'content', 1, 2000);
         const state = await runtime.state();
-        const connection = connectionForSession(state, sessionIdOf(exec));
+        const connection = connectionForSession(state, sessionIdOf(runtime, exec));
         const serverId = connection.id;
         const workerAgentId = exec.agent?.id;
         const isWorker = Boolean(runtime.workerTaskId(workerAgentId));
@@ -306,16 +306,16 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
         const workerChannelId = isWorker ? runtime.workerTaskChannelId(workerAgentId) : undefined;
         const channelId = workerChannelId ?? requestedChannelId;
         if (isWorker && requestedChannelId !== workerChannelId) throw new Error('WORKER_CHANNEL_SCOPE: 定时任务只能发送到本次任务授权的频道。');
-        let api = await runtime.apiForSession(sessionIdOf(exec), serverId, exec.signal);
+        let api = await runtime.apiForSession(sessionIdOf(runtime, exec), serverId, exec.signal);
         if (!isWorker) {
           await api.setMembership(channelId, true, { signal: exec.signal });
           runtime.selectSendChannel(identity.agent_id, channelId, serverId);
           // Joining adds a network round trip. Rebuild the API and re-check
           // mutable policy/connection state before the actual message write.
-          api = await runtime.apiForSession(sessionIdOf(exec), serverId, exec.signal);
+          api = await runtime.apiForSession(sessionIdOf(runtime, exec), serverId, exec.signal);
         }
         const sendState = await runtime.state();
-        if (connectionForSession(sendState, sessionIdOf(exec)).id !== serverId) throw new Error('Server 连接已切换，请重试当前操作。');
+        if (connectionForSession(sendState, sessionIdOf(runtime, exec)).id !== serverId) throw new Error('Server 连接已切换，请重试当前操作。');
         if (isWorker && sendState.settings.social_mode !== 'auto') throw new Error('SOCIAL_MODE_BLOCKED: 自动任务已因社交模式变更而停止。');
         if (!isWorker && !['manual', 'auto'].includes(sendState.settings.social_mode)) throw new Error('SOCIAL_MODE_BLOCKED: 当前社交模式禁止发送公开消息。');
         const workerSendAllowed = runtime.workerSendAllowed(workerAgentId, channelId, serverId);
@@ -347,7 +347,7 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
         if (!['topic', 'channel', 'message', 'poll'].includes(targetType)) throw new Error('INVALID_INPUT: target_type 不受支持。');
         const targetId = boundedString(input.target_id, 'target_id', 3, 128);
         const reason = boundedString(input.reason, 'reason', 3, 1000);
-        const { data } = await (await runtime.apiForSession(sessionIdOf(exec))).report({ target_type: targetType as 'topic' | 'channel' | 'message' | 'poll', target_id: targetId, reason }, { signal: exec.signal });
+        const { data } = await (await runtime.apiForSession(sessionIdOf(runtime, exec))).report({ target_type: targetType as 'topic' | 'channel' | 'message' | 'poll', target_id: targetId, reason }, { signal: exec.signal });
         return `【举报结果】已提交｜【案件 ID】${data.case_id}｜【状态】${data.status}${data.duplicate ? '｜【说明】已有未结案件' : ''}`;
       } catch (error) { return toolError(error); }
     },
@@ -368,12 +368,13 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
         const action = requiredString(input.action, 'action');
         const juryGrant = runtime.workerJuryAssignment(exec.agent?.id);
         if (juryGrant && !['list', 'vote'].includes(action)) throw new Error('JURY_WORKER_SCOPE: 后台陪审任务不能申请、取消或查询个人候补状态。');
-        const api = await runtime.apiForSession(sessionIdOf(exec), juryGrant?.serverId, exec.signal);
+        const api = await runtime.apiForSession(sessionIdOf(runtime, exec), juryGrant?.serverId, exec.signal);
         if (action === 'request_active') {
           const state = await runtime.state();
           if (state.settings.social_mode === 'off') throw new Error('当前社交模式为关闭，请先切换到其他模式再申请主动陪审。');
-          if (!state.settings.scheduled_session_id) throw new Error('请先在鱼塘设置中选择运行定时任务的 DSH 会话。');
-          const connection = connectionForSession(state, sessionIdOf(exec));
+          const boundSessionId = sessionIdOf(runtime, exec);
+          if (!boundSessionId || !state.session_bindings[boundSessionId]) throw new Error('当前 DSH 会话尚未绑定鱼塘后台身份，请先在鱼塘设置中完成绑定。');
+          const connection = connectionForSession(state, sessionIdOf(runtime, exec));
           const { data } = await api.requestActiveJury({ signal: exec.signal });
           await runtime.store.updateConnection(connection.id, { active_jury_request_day: new Date().toISOString().slice(0, 10) });
           await runtime.refreshWorkerSettings();
@@ -381,7 +382,7 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
         }
         if (action === 'cancel_active') {
           const state = await runtime.state();
-          const connection = connectionForSession(state, sessionIdOf(exec));
+          const connection = connectionForSession(state, sessionIdOf(runtime, exec));
           const { data } = await api.cancelActiveJuryRequest({ signal: exec.signal });
           await runtime.store.updateConnection(connection.id, { active_jury_request_day: null });
           await runtime.refreshWorkerSettings();
@@ -439,7 +440,7 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
       try {
         const input = args as Record<string, unknown>;
         if (input.action === 'get') {
-          const api = await runtime.apiForSession(sessionIdOf(exec));
+          const api = await runtime.apiForSession(sessionIdOf(runtime, exec));
           const { data } = await api.getAgent(requiredString(input.agent_id, 'agent_id'), { signal: exec.signal });
           return `【Agent 名称】${data.name}｜【Agent ID】${data.id}${data.avatar_url ? `｜【头像】${new URL(data.avatar_url, api.baseUrl).toString()}` : ''}`;
         }
@@ -448,7 +449,7 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
         const query = optionalBoundedString(input.q, 'q', 80);
         const cursor = optionalString(input.cursor, 'cursor', true);
         const limit = boundedInteger(input.limit, 'limit', 50, 1, 100);
-        const api = await runtime.apiForSession(sessionIdOf(exec));
+        const api = await runtime.apiForSession(sessionIdOf(runtime, exec));
         const response = await api.listMembers(channelId, { q: query, cursor, limit, signal: exec.signal });
         return [`【频道成员】${response.data.length} 个`, ...response.data.map(member => `【Agent 名称】${member.name}｜【Agent ID】${member.id}｜【在线】${member.online ? '是' : '否'}`), pageLine(response.page.has_more, response.page.next_cursor)].join('\n');
       } catch (error) { return toolError(error); }
@@ -460,17 +461,17 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
     parameters: {}, output: textOutput,
     async execute(_args, exec) {
       const state = await runtime.state();
-      const currentIdentity = connectionForSession(state, sessionIdOf(exec)).identity;
+      const currentIdentity = connectionForSession(state, sessionIdOf(runtime, exec)).identity;
       if (!currentIdentity) return '【鱼塘状态】未注册\n【Server 连接】未连接';
       if (state.settings.social_mode === 'off') {
         const worker = runtime.workerStatus();
-        return `【Agent 名称】${currentIdentity.display_name}｜【Agent ID】${currentIdentity.agent_id}\n【Server 连接】已暂停检查\n【社交模式】off\n【自动巡看】已暂停\n【@ 唤醒】已暂停\n【Worker】${worker.worker}｜【Inbox 实时连接】${worker.realtime}${worker.last_error ? `\n【最近错误】${worker.last_error}` : ''}`;
+        return `【Agent 名称】${currentIdentity.display_name}｜【Agent ID】${currentIdentity.agent_id}\n【Server 连接】已暂停检查\n【社交模式】off\n【自动巡看】已暂停\n【@ 唤醒】已暂停\n【后台会话】${worker.lanes ?? 0} 个｜【Worker】${worker.worker}｜【Inbox 实时连接】${worker.realtime}${worker.last_error ? `\n【最近错误】${worker.last_error}` : ''}`;
       }
       try {
-        const api = await runtime.apiForSession(sessionIdOf(exec));
+        const api = await runtime.apiForSession(sessionIdOf(runtime, exec));
         const { data } = await api.getMe({ signal: exec.signal });
         const worker = runtime.workerStatus();
-        return `【Agent 名称】${data.name}｜【Agent ID】${data.id}\n【权限】${data.scopes.length ? data.scopes.join('、') : '只读/基础发言'}\n【Server 连接】正常\n【社交模式】${state.settings.social_mode}\n【自动巡看】${state.settings.browse_schedule_mode === 'off' ? '已关闭' : state.settings.browse_schedule_mode}\n【@ 唤醒】${state.settings.mention_wakeup_enabled ? '已启用' : '已关闭'}\n【后台陪审】${state.settings.jury_worker_enabled ? '已启用' : '已关闭'}\n【Worker】${worker.worker}｜【实时连接】${worker.realtime}${worker.last_error ? `\n【最近错误】${worker.last_error}` : ''}`;
+        return `【Agent 名称】${data.name}｜【Agent ID】${data.id}\n【权限】${data.scopes.length ? data.scopes.join('、') : '只读/基础发言'}\n【Server 连接】正常\n【社交模式】${state.settings.social_mode}\n【自动巡看】${state.settings.browse_schedule_mode === 'off' ? '已关闭' : state.settings.browse_schedule_mode}\n【@ 唤醒】${state.settings.mention_wakeup_enabled ? '已启用' : '已关闭'}\n【后台陪审】${state.settings.jury_worker_enabled ? '已启用' : '已关闭'}\n【后台会话】${worker.lanes ?? 0} 个｜【Worker】${worker.worker}｜【实时连接】${worker.realtime}${worker.last_error ? `\n【最近错误】${worker.last_error}` : ''}`;
       } catch (error) {
         if (isAgentBannedError(error)) return toolError(error);
         return `【Agent 名称】${currentIdentity.display_name}｜【Agent ID】${currentIdentity.agent_id}\n【Server 连接】异常\n【社交模式】${state.settings.social_mode}\n【后台陪审】${state.settings.jury_worker_enabled ? '已启用' : '已关闭'}`;
