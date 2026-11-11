@@ -53,14 +53,28 @@ export interface PluginSettings {
   daily_browse_time: string;
   scheduled_session_id: string | null;
 }
+/**
+ * Per-session binding: one DSH Session owns one Yutang identity (a Connection) and its
+ * own background-worker switches. This is what makes several personas able to talk in
+ * the same channel from a single DSH process.
+ */
+export interface SessionBinding {
+  connection_id: string;
+  mention_wakeup_enabled: boolean;
+  browse_schedule_mode: BrowseScheduleMode;
+  daily_browse_time: string;
+}
+
 export interface YutangState {
-  version: 6;
+  version: 7;
   active_server_id: string;
   last_yutang_session_id: string | null;
   task_session_selection_set: boolean;
   servers: ServerConnectionState[];
   settings: PluginSettings;
   turn_tool_locks: Record<string, number>;
+  /** SessionId → binding. A Session without an entry falls back to `active_server_id` (legacy single-identity behaviour). */
+  session_bindings: Record<string, SessionBinding>;
 }
 
 export const defaultSettings: PluginSettings = {
@@ -81,6 +95,26 @@ const validCursors = (value: unknown): Record<string, number> => value && typeof
 const validTurnToolLocks = (value: unknown): Record<string, number> => value && typeof value === 'object' && !Array.isArray(value)
   ? Object.fromEntries(Object.entries(value as Record<string, unknown>).filter((entry): entry is [string, number] => Boolean(entry[0]) && typeof entry[1] === 'number' && Number.isSafeInteger(entry[1]) && entry[1] > 0))
   : {};
+const validSessionId = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 160;
+const validTimeOfDay = (value: unknown): string => typeof value === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/u.test(value) ? value : defaultSettings.daily_browse_time;
+const validBrowseScheduleMode = (value: unknown, fallback: BrowseScheduleMode = 'off'): BrowseScheduleMode =>
+  ['off', 'hourly', 'daily', 'curiosity'].includes(String(value)) ? value as BrowseScheduleMode : fallback;
+const normalizeSessionBindings = (value: unknown, servers: ServerConnectionState[]): Record<string, SessionBinding> => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const knownConnections = new Set(servers.map(server => server.id));
+  const entries = Object.entries(value as Record<string, unknown>).flatMap(([sessionId, raw]): Array<[string, SessionBinding]> => {
+    if (!validSessionId(sessionId) || !raw || typeof raw !== 'object' || Array.isArray(raw)) return [];
+    const item = raw as Partial<SessionBinding>;
+    if (typeof item.connection_id !== 'string' || !knownConnections.has(item.connection_id)) return [];
+    return [[sessionId, {
+      connection_id: item.connection_id,
+      mention_wakeup_enabled: item.mention_wakeup_enabled === true,
+      browse_schedule_mode: validBrowseScheduleMode(item.browse_schedule_mode),
+      daily_browse_time: validTimeOfDay(item.daily_browse_time),
+    }]];
+  });
+  return Object.fromEntries(entries);
+};
 const cleanIdentity = (value: unknown): IdentityState | null => {
   if (!value || typeof value !== 'object') return null;
   const item = value as IdentityState & { private_key?: unknown; access_token?: unknown; access_token_expires_at?: unknown };
@@ -116,6 +150,23 @@ const normalizeConnection = (value: unknown): ServerConnectionState | null => {
 
 export const activeConnection = (state: YutangState): ServerConnectionState => state.servers.find(server => server.id === state.active_server_id) ?? state.servers[0]!;
 
+/** The identity binding owned by a DSH Session, if that Session has been bound to one. */
+export const bindingOf = (state: YutangState, sessionId: string | null | undefined): SessionBinding | undefined =>
+  sessionId ? state.session_bindings[sessionId] : undefined;
+
+/**
+ * Resolve which Yutang identity a given Session acts as.
+ * Bound Sessions win; unbound Sessions keep the legacy profile-wide `active_server_id` behaviour.
+ */
+export const connectionForSession = (state: YutangState, sessionId: string | null | undefined): ServerConnectionState => {
+  const binding = bindingOf(state, sessionId);
+  const bound = binding ? state.servers.find(server => server.id === binding.connection_id) : undefined;
+  return bound ?? activeConnection(state);
+};
+
+/** Sessions that currently own a background worker. */
+export const boundSessions = (state: YutangState): Array<[string, SessionBinding]> => Object.entries(state.session_bindings);
+
 export class StateStore {
   readonly path: string;
   private state: YutangState | undefined;
@@ -129,11 +180,12 @@ export class StateStore {
     await chmod(dirname(this.path), 0o700);
     try {
       const parsed = JSON.parse(await readFile(this.path, 'utf8')) as Record<string, unknown>;
-      this.state = parsed.version === 6 && Array.isArray(parsed.servers) ? this.fromV6(parsed)
+      this.state = parsed.version === 7 && Array.isArray(parsed.servers) ? this.fromV7(parsed)
+        : parsed.version === 6 && Array.isArray(parsed.servers) ? this.fromV6(parsed)
         : parsed.version === 5 && Array.isArray(parsed.servers) ? this.fromV5(parsed)
         : parsed.version === 4 && Array.isArray(parsed.servers) ? this.fromV4(parsed)
           : this.migrateLegacy(parsed);
-      if (parsed.version !== 6) await this.save();
+      if (parsed.version !== 7) await this.save();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('dsh-yutang local state is unreadable');
       this.state = this.initialState();
@@ -175,7 +227,7 @@ export class StateStore {
       ? parsed.active_server_id
       : servers.find(server => server.kind === 'custom' && server.server_url)?.id ?? 'official';
     const settings = this.settingsFrom(parsed.settings);
-    return { version: 6, active_server_id: selected, last_yutang_session_id: null, task_session_selection_set: Boolean(settings.scheduled_session_id), servers, settings, turn_tool_locks: validTurnToolLocks(parsed.turn_tool_locks) };
+    return { version: 7, session_bindings: {}, active_server_id: selected, last_yutang_session_id: null, task_session_selection_set: Boolean(settings.scheduled_session_id), servers, settings, turn_tool_locks: validTurnToolLocks(parsed.turn_tool_locks) };
   }
 
   private fromV5(parsed: Record<string, unknown>): YutangState {
@@ -196,6 +248,23 @@ export class StateStore {
       const raw = (parsed.servers as Array<Record<string, unknown>>).find(item => item.id === server.id);
       server.active_jury_request_day = validDateKey(raw?.active_jury_request_day);
     }
+    // v6 → v7: the old profile-wide worker config becomes the first Session binding.
+    const scheduled = state.settings.scheduled_session_id;
+    if (validSessionId(scheduled) && state.servers.some(server => server.id === state.active_server_id)) {
+      state.session_bindings[scheduled] = {
+        connection_id: state.active_server_id,
+        mention_wakeup_enabled: state.settings.mention_wakeup_enabled,
+        browse_schedule_mode: state.settings.browse_schedule_mode,
+        daily_browse_time: state.settings.daily_browse_time,
+      };
+    }
+    return state;
+  }
+
+  private fromV7(parsed: Record<string, unknown>): YutangState {
+    const state = this.fromV6(parsed);
+    // `session_bindings` is authoritative in v7; drop any binding guessed from legacy settings.
+    state.session_bindings = normalizeSessionBindings(parsed.session_bindings, state.servers);
     return state;
   }
 
@@ -211,18 +280,18 @@ export class StateStore {
     const servers = [connection];
     this.ensurePermanentServers(servers);
     const settings = this.settingsFrom(parsed.settings);
-    return { version: 6, active_server_id: connection.id, last_yutang_session_id: null, task_session_selection_set: Boolean(settings.scheduled_session_id), servers, settings, turn_tool_locks: {} };
+    return { version: 7, session_bindings: {}, active_server_id: connection.id, last_yutang_session_id: null, task_session_selection_set: Boolean(settings.scheduled_session_id), servers, settings, turn_tool_locks: {} };
   }
 
   private initialState(): YutangState {
     if (this.officialServerUrl) {
       const official = emptyConnection('official', 'official', '官方服务器', this.officialServerUrl);
-      return { version: 6, active_server_id: official.id, last_yutang_session_id: null, task_session_selection_set: false, servers: [official], settings: { ...defaultSettings }, turn_tool_locks: {} };
+      return { version: 7, session_bindings: {}, active_server_id: official.id, last_yutang_session_id: null, task_session_selection_set: false, servers: [official], settings: { ...defaultSettings }, turn_tool_locks: {} };
     }
     const connection = emptyConnection(connectionIdFor(this.defaultServerUrl), 'custom', '自定义服务器', this.defaultServerUrl);
     const servers = [connection];
     this.ensurePermanentServers(servers);
-    return { version: 6, active_server_id: connection.id, last_yutang_session_id: null, task_session_selection_set: false, servers, settings: { ...defaultSettings }, turn_tool_locks: {} };
+    return { version: 7, session_bindings: {}, active_server_id: connection.id, last_yutang_session_id: null, task_session_selection_set: false, servers, settings: { ...defaultSettings }, turn_tool_locks: {} };
   }
 
   private ensurePermanentServers(servers: ServerConnectionState[]) {
@@ -338,9 +407,53 @@ export class StateStore {
     return { selectedByDefault };
   }
 
+  /** Bind a DSH Session to a Yutang identity so that Session can act (and work) as that Agent. */
+  async bindSession(sessionId: string, connectionId: string, patch: Partial<Omit<SessionBinding, 'connection_id'>> = {}): Promise<SessionBinding> {
+    if (!validSessionId(sessionId)) throw new Error('无效的 DSH Session ID。');
+    const state = await this.load();
+    if (!state.servers.some(server => server.id === connectionId)) throw new Error('找不到此 Server 连接。');
+    const current = state.session_bindings[sessionId];
+    const binding: SessionBinding = {
+      connection_id: connectionId,
+      mention_wakeup_enabled: patch.mention_wakeup_enabled ?? current?.mention_wakeup_enabled ?? state.settings.mention_wakeup_enabled,
+      browse_schedule_mode: patch.browse_schedule_mode ?? current?.browse_schedule_mode ?? state.settings.browse_schedule_mode,
+      daily_browse_time: patch.daily_browse_time ?? current?.daily_browse_time ?? state.settings.daily_browse_time,
+    };
+    state.session_bindings[sessionId] = binding;
+    if (state.last_yutang_session_id === null) state.last_yutang_session_id = sessionId;
+    await this.save();
+    return binding;
+  }
+
+  async updateSessionBinding(sessionId: string, patch: Partial<Omit<SessionBinding, 'connection_id'>>): Promise<SessionBinding> {
+    const state = await this.load();
+    const binding = state.session_bindings[sessionId];
+    if (!binding) throw new Error('此 DSH Session 尚未绑定鱼塘身份。');
+    Object.assign(binding, patch);
+    await this.save();
+    return binding;
+  }
+
+  async unbindSession(sessionId: string): Promise<boolean> {
+    const state = await this.load();
+    if (!(sessionId in state.session_bindings)) return false;
+    delete state.session_bindings[sessionId];
+    await this.save();
+    return true;
+  }
+
+  private dropBindingsFor(connectionId: string) {
+    const state = this.state;
+    if (!state) return;
+    for (const [sessionId, binding] of Object.entries(state.session_bindings)) {
+      if (binding.connection_id === connectionId) delete state.session_bindings[sessionId];
+    }
+  }
+
   async addCustomServer(name: string, serverUrl: string): Promise<ServerConnectionState> {
     const state = await this.load();
-    if (state.servers.some(server => server.server_url === serverUrl)) throw new Error('此 Server 已经添加。');
+    // Same URL may host several registered identities; only an *unregistered* duplicate is refused.
+    if (state.servers.some(server => server.server_url === serverUrl && !server.identity && server.pending_registration === null)) throw new Error('此 Server 已经添加。');
     const server = emptyConnection(randomUUID(), 'custom', name || new URL(serverUrl).host, serverUrl);
     state.servers.push(server);
     await this.save();
@@ -363,6 +476,7 @@ export class StateStore {
     if (!server || server.kind === 'official') throw new Error('官方服务器是固定选项，不能删除。');
     if (server.identity) throw new Error('此连接已注册 Agent，请先注销并同步删除服务端身份。');
     state.servers = state.servers.filter(item => item.id !== id);
+    this.dropBindingsFor(id);
     if (state.active_server_id === id) state.active_server_id = state.servers.find(item => item.server_url)?.id ?? 'official';
     await this.save();
   }
@@ -378,6 +492,7 @@ export class StateStore {
       server.read_cursors = {};
     } else {
       state.servers = state.servers.filter(item => item.id !== id);
+      this.dropBindingsFor(id);
       if (state.active_server_id === id) state.active_server_id = state.servers.find(item => item.server_url)?.id ?? 'official';
     }
     await this.save();
