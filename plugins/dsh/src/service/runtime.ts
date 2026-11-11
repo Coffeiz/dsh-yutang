@@ -2,7 +2,7 @@ import { createHash, generateKeyPairSync, createPrivateKey, sign } from 'node:cr
 import { resolve } from 'node:path';
 import { credentialKey, type CredentialKey, type CredentialProvider } from '@deepseek-ai/dsh-credentials';
 import { ApiError, YutangApi } from '@dsh-im/client';
-import { activeConnection, type IdentityState, type PendingRegistrationState, type PluginSettings, type ServerConnectionState, type StateStore, type YutangState } from '../storage/state.js';
+import { activeConnection, bindingOf, type IdentityState, type PendingRegistrationState, type PluginSettings, type ServerConnectionState, type StateStore, type YutangState } from '../storage/state.js';
 import { normalizeServerUrl } from '../config.js';
 import { normalizeTurnLockAllowlist, YutangTurnToolLock } from '../security/tool-lock.js';
 
@@ -25,7 +25,7 @@ export class YutangRuntime {
   private readonly turnToolLock = new YutangTurnToolLock();
   private turnLockAllowedTools: string[] = [];
   private serverSwitchQueue: Promise<void> = Promise.resolve();
-  private accessToken: { serverId: string; agentId: string; value: string; expiresAt: number } | undefined;
+  private readonly accessTokens = new Map<string, { agentId: string; value: string; expiresAt: number }>();
   private readonly accessTokenRefreshes = new Map<string, Promise<string>>();
   private readonly credentialProfileId: string;
   constructor(readonly store: StateStore, readonly defaultServerUrl: string, private readonly credentials: CredentialProvider, private readonly logger: LoggerLike = console, dataDir = 'default') {
@@ -159,12 +159,18 @@ export class YutangRuntime {
     return new YutangApi(server.server_url, accessToken ?? undefined);
   }
 
+  /** Cached Bearer token of one identity; several Sessions may hold different identities at once. */
+  private cachedToken(serverId: string, agentId: string): string | undefined {
+    const token = this.accessTokens.get(serverId);
+    return token && token.agentId === agentId && token.expiresAt > Date.now() + 30_000 ? token.value : undefined;
+  }
+
   private async recoverUnauthorizedToken(serverId: string, agentId: string, rejectedToken: string, signal?: AbortSignal) {
-    const isFreshReplacement = (token: typeof this.accessToken) => token?.serverId === serverId
-      && token.agentId === agentId
-      && token.value !== rejectedToken
-      && token.expiresAt > Date.now() + 30_000;
-    if (isFreshReplacement(this.accessToken)) return this.accessToken!.value;
+    const isFreshReplacement = () => {
+      const token = this.accessTokens.get(serverId);
+      return Boolean(token && token.agentId === agentId && token.value !== rejectedToken && token.expiresAt > Date.now() + 30_000);
+    };
+    if (isFreshReplacement()) return this.accessTokens.get(serverId)!.value;
 
     const refreshKey = `${serverId}:${agentId}`;
     const pending = this.accessTokenRefreshes.get(refreshKey);
@@ -173,13 +179,11 @@ export class YutangRuntime {
     const refresh = (async () => {
       const state = await this.store.load();
       if (state.settings.social_mode === 'off') throw new ApiError('SOCIAL_MODE_BLOCKED: off 模式已暂停鱼塘 Server 网络访问。');
-      const server = activeConnection(state);
-      if (server.id !== serverId || server.identity?.agent_id !== agentId) throw new ApiError('Server 连接或 Agent 身份已变化，请重试当前操作。');
+      const server = state.servers.find(item => item.id === serverId);
+      if (!server || server.identity?.agent_id !== agentId) throw new ApiError('Server 连接或 Agent 身份已变化，请重试当前操作。');
 
-      if (isFreshReplacement(this.accessToken)) return this.accessToken!.value;
-      if (this.accessToken?.serverId === serverId && this.accessToken.agentId === agentId && this.accessToken.value === rejectedToken) {
-        this.accessToken = undefined;
-      }
+      if (isFreshReplacement()) return this.accessTokens.get(serverId)!.value;
+      if (this.accessTokens.get(serverId)?.value === rejectedToken) this.accessTokens.delete(serverId);
       return this.authenticate(server.identity, server.id, signal);
     })();
     this.accessTokenRefreshes.set(refreshKey, refresh);
@@ -215,39 +219,61 @@ export class YutangRuntime {
     });
   }
 
-  async authenticate(identity?: IdentityState, expectedServerId?: string, signal?: AbortSignal): Promise<string> {
+  async authenticate(identity?: IdentityState, serverId?: string, signal?: AbortSignal): Promise<string> {
     signal?.throwIfAborted();
     const state = await this.store.load();
-    const server = activeConnection(state);
-    if (expectedServerId !== undefined && server.id !== expectedServerId) throw new ApiError('Server 连接已切换，请重试当前操作。');
+    const server = serverId ? state.servers.find(item => item.id === serverId) : activeConnection(state);
+    if (!server) throw new ApiError('找不到此 Server 连接。');
     const current = identity ?? server.identity;
     if (!current) throw new ApiError('尚未注册鱼塘 Agent，请先在 DSH 设置中完成注册。');
     if (server.identity?.agent_id !== current.agent_id) throw new ApiError('当前 Server Agent 身份已变化，请重试当前操作。');
     if (!server.server_url) throw new ApiError('官方 Server 地址尚未由部署配置提供。');
-    if (this.accessToken?.serverId === server.id && this.accessToken.agentId === current.agent_id && this.accessToken.expiresAt > Date.now() + 30_000) return this.accessToken.value;
+    const cached = this.cachedToken(server.id, current.agent_id);
+    if (cached) return cached;
     const privateKey = await this.privateKey(server.id);
     const api = this.api(server);
     const session = await api.authenticate(current.agent_id, async (challenge) => sign(null, Buffer.from(challenge, 'utf8'), createPrivateKey(privateKey)).toString('base64url'), signal);
     signal?.throwIfAborted();
-    if (activeConnection(await this.store.load()).id !== server.id) throw new ApiError('Server 连接已切换，请重试当前操作。');
-    this.accessToken = { serverId: server.id, agentId: current.agent_id, value: session.access_token, expiresAt: Date.parse(session.expires_at) };
+    const latestServer = (await this.store.load()).servers.find(item => item.id === server.id);
+    if (latestServer?.identity?.agent_id !== current.agent_id) throw new ApiError('Server 连接或 Agent 身份已变化，请重试当前操作。');
+    this.accessTokens.set(server.id, { agentId: current.agent_id, value: session.access_token, expiresAt: Date.parse(session.expires_at) });
     await this.store.updateConnection(server.id, { identity: { ...current, scopes: session.agent.scopes } });
     return session.access_token;
   }
 
+  /**
+   * API client bound to the identity of one DSH Session.
+   * A bound Session always acts as its own Connection; unbound Sessions keep the legacy
+   * profile-wide behaviour (with `expectedServerId` guarding against a mid-flight switch).
+   */
+  async apiForSession(sessionId: string | undefined, expectedServerId?: string, signal?: AbortSignal): Promise<YutangApi> {
+    signal?.throwIfAborted();
+    const binding = bindingOf(await this.store.load(), sessionId);
+    if (!binding) return this.apiForCurrentAgent(expectedServerId, signal);
+    if (expectedServerId !== undefined && binding.connection_id !== expectedServerId) throw new ApiError('Server 连接已切换，请重试当前操作。');
+    return this.apiForConnection(binding.connection_id, signal);
+  }
+
   async apiForCurrentAgent(expectedServerId?: string, signal?: AbortSignal): Promise<YutangApi> {
+    const state = await this.store.load();
+    const server = activeConnection(state);
+    if (expectedServerId !== undefined && server.id !== expectedServerId) throw new ApiError('Server 连接已切换，请重试当前操作。');
+    return this.apiForConnection(server.id, signal);
+  }
+
+  private async apiForConnection(connectionId: string, signal?: AbortSignal): Promise<YutangApi> {
     signal?.throwIfAborted();
     const state = await this.store.load();
     if (state.settings.social_mode === 'off') throw new ApiError('SOCIAL_MODE_BLOCKED: off 模式已暂停鱼塘 Server 网络访问。');
-    const server = activeConnection(state);
-    if (expectedServerId !== undefined && server.id !== expectedServerId) throw new ApiError('Server 连接已切换，请重试当前操作。');
+    const server = state.servers.find(item => item.id === connectionId);
+    if (!server) throw new ApiError('Server 连接已切换，请重试当前操作。');
     if (!server.identity) throw new ApiError('尚未注册鱼塘 Agent，请先在 DSH 设置中完成注册。');
     const accessToken = await this.authenticate(server.identity, server.id, signal);
     signal?.throwIfAborted();
     const latest = await this.store.load();
     if (latest.settings.social_mode === 'off') throw new ApiError('SOCIAL_MODE_BLOCKED: off 模式已暂停鱼塘 Server 网络访问。');
-    const latestServer = activeConnection(latest);
-    if (latestServer.id !== server.id) throw new ApiError('Server 连接已切换，请重试当前操作。');
+    const latestServer = latest.servers.find(item => item.id === server.id);
+    if (!latestServer?.identity) throw new ApiError('Server 连接或 Agent 身份已变化，请重试当前操作。');
     const api = this.api(latestServer, accessToken);
     api.setUnauthorizedRecovery((rejectedToken, requestSignal) => this.recoverUnauthorizedToken(latestServer.id, latestServer.identity!.agent_id, rejectedToken, requestSignal));
     // Revalidate on every tool operation so cached Bearer Sessions cannot
@@ -274,7 +300,7 @@ export class YutangRuntime {
       if (current.id === serverId) return target;
       await this.beforeServerSwitch?.(serverId);
       const server = await this.store.selectServer(serverId);
-      this.accessToken = undefined;
+      this.accessTokens.clear();
       await this.notifySettingsChanged();
       return server;
     });
@@ -295,7 +321,7 @@ export class YutangRuntime {
     await this.store.removeServer(serverId);
     await this.credentials.deleteRecord(this.identityCredential(serverId));
     if (wasActive) {
-      this.accessToken = undefined;
+      this.accessTokens.clear();
       await this.notifySettingsChanged();
     }
     this.logInfo('Unregistered Server connection removed locally', { server_id: serverId, pending_registration: Boolean(server.pending_registration) });
@@ -353,7 +379,7 @@ export class YutangRuntime {
     const challenge = `dsh-yutang-agent-unregister:v1\n${identity.agent_id}`;
     const signature = sign(null, Buffer.from(challenge, 'utf8'), createPrivateKey(privateKey)).toString('base64url');
     await this.api(server).unregisterAgent(identity.agent_id, signature);
-    this.accessToken = undefined;
+    this.accessTokens.delete(server.id);
     this.workerGrants.delete(identity.agent_id);
     await this.store.forgetUnregisteredServer(server.id);
     await this.credentials.deleteRecord(this.identityCredential(server.id));
