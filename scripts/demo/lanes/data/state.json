@@ -1,0 +1,213 @@
+{
+  "version": 7,
+  "session_bindings": {
+    "session-ded78cfd2d754b30a34372108d511737": {
+      "connection_id": "custom-38613dde22a0b8e71bbb",
+      "mention_wakeup_enabled": false,
+      "browse_schedule_mode": "loop",
+      "daily_browse_time": "09:00",
+      "loop_interval_seconds": 20
+    },
+    "session-014231db83774bfa9f277f4184e5b545": {
+      "connection_id": "e94b4acd-0011-41c8-a544-bab44550adbe",
+      "mention_wakeup_enabled": false,
+      "browse_schedule_mode": "loop",
+      "daily_browse_time": "09:00",
+      "loop_interval_seconds": 20
+    },
+    "session-d109ccca61924bfab8ab87ea14c668d0": {
+      "connection_id": "fa7c25f9-11e3-4699-9042-9dedfaab5574",
+      "mention_wakeup_enabled": false,
+      "browse_schedule_mode": "loop",
+      "daily_browse_time": "09:00",
+      "loop_interval_seconds": 20
+    },
+    "session-18a833fcc07c4ba792a33ac109fedd6f": {
+      "connection_id": "cd4f4915-d223-4755-b27c-47556e1ca1f2",
+      "mention_wakeup_enabled": false,
+      "browse_schedule_mode": "loop",
+      "daily_browse_time": "09:00",
+      "loop_interval_seconds": 20
+    },
+    "session-57ca0f247e0f4f04929e3377a92a5f1b": {
+      "connection_id": "b31cff12-f340-48a7-8f7f-4d742c92f4b3",
+      "mention_wakeup_enabled": false,
+      "browse_schedule_mode": "loop",
+      "daily_browse_time": "09:00",
+      "loop_interval_seconds": 20
+    }
+  },
+  "active_server_id": "custom-38613dde22a0b8e71bbb",
+  "last_yutang_session_id": "session-ded78cfd2d754b30a34372108d511737",
+  "task_session_selection_set": false,
+  "servers": [
+    {
+      "id": "official",
+      "kind": "official",
+      "name": "官方服务器",
+      "server_url": null,
+      "identity": null,
+      "pending_registration": null,
+      "worker_session_id": null,
+      "active_jury_request_day": null,
+      "read_cursors": {},
+      "browse_channel_cursor_id": null,
+      "browse_next_run_at": null,
+      "last_daily_browse_date": null,
+      "curiosity_points": 0,
+      "curiosity_next_roll_at": null,
+      "curiosity_last_roll_at": null,
+      "curiosity_last_roll_value": null
+    },
+    {
+      "id": "custom-38613dde22a0b8e71bbb",
+      "kind": "custom",
+      "name": "自定义服务器",
+      "server_url": "http://127.0.0.1:9555",
+      "identity": {
+        "owner_id": "demo-owner",
+        "agent_id": "agent_01m755dvcaknxbcx3aea5vqy2z",
+        "display_name": "老陈",
+        "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA76QxRo2jIOLPg11ZQJEHvlhpukiEJwHsVhPJZp8wBNY=\n-----END PUBLIC KEY-----\n",
+        "scopes": []
+      },
+      "pending_registration": null,
+      "worker_session_id": null,
+      "active_jury_request_day": null,
+      "read_cursors": {
+        "channel_01m7578svdqk1d373wszhvbdxx": 22,
+        "channel_01m755dvjzgbrqj2krv8gakbhy": 76
+      },
+      "browse_channel_cursor_id": "channel_01m7578svdqk1d373wszhvbdxx",
+      "browse_next_run_at": 1794405194834,
+      "last_daily_browse_date": null,
+      "curiosity_points": 0,
+      "curiosity_next_roll_at": null,
+      "curiosity_last_roll_at": null,
+      "curiosity_last_roll_value": null
+    },
+    {
+      "id": "e94b4acd-0011-41c8-a544-bab44550adbe",
+      "kind": "custom",
+      "name": "小满",
+      "server_url": "http://127.0.0.1:9555",
+      "identity": {
+        "owner_id": "demo-owner",
+        "agent_id": "agent_01m755dvdzjbws1c1x7azyp9tb",
+        "display_name": "小满",
+        "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAuU+ZOPCr6Hh7LYEpqXhtlIQ/AylM6s79RcuFTIlBZDQ=\n-----END PUBLIC KEY-----\n",
+        "scopes": []
+      },
+      "pending_registration": null,
+      "worker_session_id": null,
+      "active_jury_request_day": null,
+      "read_cursors": {
+        "channel_01m7578svdqk1d373wszhvbdxx": 22,
+        "channel_01m755dvjzgbrqj2krv8gakbhy": 76
+      },
+      "browse_channel_cursor_id": "channel_01m7578svdqk1d373wszhvbdxx",
+      "browse_next_run_at": 1794405198659,
+      "last_daily_browse_date": null,
+      "curiosity_points": 0,
+      "curiosity_next_roll_at": null,
+      "curiosity_last_roll_at": null,
+      "curiosity_last_roll_value": null
+    },
+    {
+      "id": "fa7c25f9-11e3-4699-9042-9dedfaab5574",
+      "kind": "custom",
+      "name": "阿杠",
+      "server_url": "http://127.0.0.1:9555",
+      "identity": {
+        "owner_id": "demo-owner",
+        "agent_id": "agent_01m755dveyv7xhzhatj2yncpwp",
+        "display_name": "阿杠",
+        "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA9Sr6RhGYJOJOpZZmfao/st+q00InJ9JVGWDlqyzxA9U=\n-----END PUBLIC KEY-----\n",
+        "scopes": []
+      },
+      "pending_registration": null,
+      "worker_session_id": null,
+      "active_jury_request_day": null,
+      "read_cursors": {
+        "channel_01m7578svdqk1d373wszhvbdxx": 22,
+        "channel_01m755dvjzgbrqj2krv8gakbhy": 77
+      },
+      "browse_channel_cursor_id": "channel_01m7578svdqk1d373wszhvbdxx",
+      "browse_next_run_at": 1794405202080,
+      "last_daily_browse_date": null,
+      "curiosity_points": 0,
+      "curiosity_next_roll_at": null,
+      "curiosity_last_roll_at": null,
+      "curiosity_last_roll_value": null
+    },
+    {
+      "id": "cd4f4915-d223-4755-b27c-47556e1ca1f2",
+      "kind": "custom",
+      "name": "桃子",
+      "server_url": "http://127.0.0.1:9555",
+      "identity": {
+        "owner_id": "demo-owner",
+        "agent_id": "agent_01m755dvfptt8p403mcqa8xh0q",
+        "display_name": "桃子",
+        "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAcUAj+NyL/amJG6p0tsXE+u9vEKApoqN8dV4VJZBBAu0=\n-----END PUBLIC KEY-----\n",
+        "scopes": []
+      },
+      "pending_registration": null,
+      "worker_session_id": null,
+      "active_jury_request_day": null,
+      "read_cursors": {
+        "channel_01m7578svdqk1d373wszhvbdxx": 21,
+        "channel_01m755dvjzgbrqj2krv8gakbhy": 78
+      },
+      "browse_channel_cursor_id": "channel_01m755dvjzgbrqj2krv8gakbhy",
+      "browse_next_run_at": 1794405199082,
+      "last_daily_browse_date": null,
+      "curiosity_points": 0,
+      "curiosity_next_roll_at": null,
+      "curiosity_last_roll_at": null,
+      "curiosity_last_roll_value": null
+    },
+    {
+      "id": "b31cff12-f340-48a7-8f7f-4d742c92f4b3",
+      "kind": "custom",
+      "name": "沈默",
+      "server_url": "http://127.0.0.1:9555",
+      "identity": {
+        "owner_id": "demo-owner",
+        "agent_id": "agent_01m755dvgevqa5y0em4c2zw1sv",
+        "display_name": "沈默",
+        "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAa/Dqa6ZvJQ57qMkf5fz4qmKwztKQ/5hXW4jLdf66DY8=\n-----END PUBLIC KEY-----\n",
+        "scopes": []
+      },
+      "pending_registration": null,
+      "worker_session_id": null,
+      "active_jury_request_day": null,
+      "read_cursors": {
+        "channel_01m7578svdqk1d373wszhvbdxx": 22,
+        "channel_01m755dvjzgbrqj2krv8gakbhy": 75
+      },
+      "browse_channel_cursor_id": "channel_01m7578svdqk1d373wszhvbdxx",
+      "browse_next_run_at": 1794405207962,
+      "last_daily_browse_date": null,
+      "curiosity_points": 0,
+      "curiosity_next_roll_at": null,
+      "curiosity_last_roll_at": null,
+      "curiosity_last_roll_value": null
+    }
+  ],
+  "settings": {
+    "social_mode": "auto",
+    "system_prompt_enabled": false,
+    "agent_personality": "",
+    "knowledge_context": "",
+    "auto_browse_enabled": false,
+    "poll_interval_minutes": 10,
+    "mention_wakeup_enabled": false,
+    "jury_worker_enabled": false,
+    "tool_lock_allowed_tools": [],
+    "browse_schedule_mode": "off",
+    "daily_browse_time": "09:00",
+    "scheduled_session_id": null
+  },
+  "turn_tool_locks": {}
+}

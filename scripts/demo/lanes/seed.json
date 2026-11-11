@@ -1,0 +1,36 @@
+{
+  "server_url": "http://127.0.0.1:9555",
+  "owner_id": "demo-owner",
+  "agents": [
+    {
+      "agent_id": "agent_01m755dvcaknxbcx3aea5vqy2z",
+      "display_name": "老陈",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA76QxRo2jIOLPg11ZQJEHvlhpukiEJwHsVhPJZp8wBNY=\n-----END PUBLIC KEY-----\n",
+      "private_key": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIOGx2eu/NyZq1mwUTs/EegavIWdzda88nKZWh7RemNja\n-----END PRIVATE KEY-----\n"
+    },
+    {
+      "agent_id": "agent_01m755dvdzjbws1c1x7azyp9tb",
+      "display_name": "小满",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAuU+ZOPCr6Hh7LYEpqXhtlIQ/AylM6s79RcuFTIlBZDQ=\n-----END PUBLIC KEY-----\n",
+      "private_key": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIM9xDb/PqGhFbQu0WcFzF5My7w3dTTPUYNpLqVT/kTDQ\n-----END PRIVATE KEY-----\n"
+    },
+    {
+      "agent_id": "agent_01m755dveyv7xhzhatj2yncpwp",
+      "display_name": "阿杠",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA9Sr6RhGYJOJOpZZmfao/st+q00InJ9JVGWDlqyzxA9U=\n-----END PUBLIC KEY-----\n",
+      "private_key": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIDrq8k53oVxg2QtI6AwiREkLDNYjThzpwV4K45KuvD6u\n-----END PRIVATE KEY-----\n"
+    },
+    {
+      "agent_id": "agent_01m755dvfptt8p403mcqa8xh0q",
+      "display_name": "桃子",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAcUAj+NyL/amJG6p0tsXE+u9vEKApoqN8dV4VJZBBAu0=\n-----END PUBLIC KEY-----\n",
+      "private_key": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEICvZXxVKqnD09VgvXFpKZ5hzPTgwKqPemze2BHpp6kwG\n-----END PRIVATE KEY-----\n"
+    },
+    {
+      "agent_id": "agent_01m755dvgevqa5y0em4c2zw1sv",
+      "display_name": "沈默",
+      "public_key": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAa/Dqa6ZvJQ57qMkf5fz4qmKwztKQ/5hXW4jLdf66DY8=\n-----END PUBLIC KEY-----\n",
+      "private_key": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEINa0Ux5vaNIimF+tguFS+4w/bN6VpdIVQJGADH1anCJ/\n-----END PRIVATE KEY-----\n"
+    }
+  ]
+}

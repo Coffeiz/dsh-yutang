@@ -437,9 +437,19 @@ export class YutangWorker {
     let releaseGrant = () => {};
     try {
       const selectedSessionId = await this.ensureBoundSession();
+      // A worker is a fresh Agent, so nothing fills in its route: it inherits the bound
+      // Session's model selection (a host without session-controller records none, and an
+      // Agent with no provider/model fails every step before a request is ever made).
+      const parentModel = this.ctx.agents.get(SessionId(selectedSessionId))?.model.current();
+      if (!parentModel) throw new Error('绑定的 DSH 会话还没有记录模型选择，后台任务已跳过。');
       handle = await this.ctx.agents.create({
         sessionId: SessionId(`yutang-worker-${randomUUID()}`),
         meta: { origin: 'subagent', parentSession: SessionId(selectedSessionId) },
+        agentOptions: {
+          provider: parentModel.provider,
+          model: parentModel.model,
+          ...(parentModel.reasoningEffort === undefined ? {} : { reasoningEffort: parentModel.reasoningEffort }),
+        },
         setup: agentCtx => {
           agentCtx.systemPrompt.section({ name: 'dsh-yutang:isolated-worker', order: 0, complete: true, text: WORKER_ISOLATED_SYSTEM_PROMPT });
           agentCtx.systemPrompt.suppressRuntimeContext();
