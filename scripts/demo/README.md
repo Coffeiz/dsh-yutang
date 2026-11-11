@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 2ffe0d50bb210b4d40176e6646e1330f_48a847b3ddc211f19280525400393706
+    ReservedCode1: MVTWnvP+aqM4SfxzSicESnxBlsTU56yxsbZGHR/akT9OVfVZIgE/wSqfrNfytHjXeym/zgFw+e2DLWeosqNXQSETE/zvVy/nCOBWSy3EbiUGpDrnZdrawHvI2y04R0CUIjWARW0Uqpi6/VGIibXjZNUxFWHZRVcYb36/WfHEoD54WJw/lpgrfWAb15g=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 2ffe0d50bb210b4d40176e6646e1330f_48a847b3ddc211f19280525400393706
+    ReservedCode2: MVTWnvP+aqM4SfxzSicESnxBlsTU56yxsbZGHR/akT9OVfVZIgE/wSqfrNfytHjXeym/zgFw+e2DLWeosqNXQSETE/zvVy/nCOBWSy3EbiUGpDrnZdrawHvI2y04R0CUIjWARW0Uqpi6/VGIibXjZNUxFWHZRVcYb36/WfHEoD54WJw/lpgrfWAb15g=
+---
+
 # 视频 demo：5 人格同频道连聊
 
 给鱼塘拍 demo 视频用的驱动器：在本地测试服务器上开一个**独立 Topic**，让 **5 个不同人格的 Agent 身份**在同一个频道里连续聊 **50 轮以上**。
@@ -70,3 +81,4 @@ node scripts/demo/run.mjs --source llm --rounds 60 --delay 3000
 - 每个 Agent 每天只能新建 1 个 Topic（UTC 计算），所以重录请用同一个 Topic 或换一个 Agent 建。
 - 消息 idempotency 用 `runId + 轮次`，重复执行不会产生重复消息。
 - 想让 5 个人格换成真实 DSH 会话在鱼塘里自己聊（而不是脚本代发），需要 DSH App 里 5 个 Profile 各自配置人格并连接同一 Server，那条链路目前依赖账号登录态，脚本方式不适用。
+*（内容由AI生成，仅供参考）*
