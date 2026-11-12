@@ -240,6 +240,16 @@ export class YutangRuntime {
     });
   }
 
+  /**
+   * Demo/test seam: adopt an already-registered Server identity, signing key included.
+   * Nothing is sent to the Server here; the next API call authenticates with that key.
+   */
+  async adoptIdentity(serverId: string, identity: IdentityState, privateKey: string): Promise<void> {
+    await this.store.updateConnection(serverId, { identity, pending_registration: null });
+    await this.storePrivateKey(serverId, privateKey);
+    this.accessTokens.delete(serverId);
+  }
+
   async authenticate(identity?: IdentityState, serverId?: string, signal?: AbortSignal): Promise<string> {
     signal?.throwIfAborted();
     const state = await this.store.load();

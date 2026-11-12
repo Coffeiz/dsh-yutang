@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type {} from '@deepseek-ai/dsh-client-connection';
@@ -16,14 +16,16 @@ import type { ToolExecution, PreToolDecision, PostToolDecision, ToolExecutionRes
 import type { ApprovalService } from '@deepseek-ai/dsh-user-approval';
 import { resolveConfig } from './config.js';
 import { createYutangRpc } from './transport/rpc.js';
-import { activeConnection, StateStore } from './storage/state.js';
+import { activeConnection, LOOP_BROWSE_DEFAULT_SECONDS, StateStore } from './storage/state.js';
 import { YutangRuntime, type LoggerLike } from './service/runtime.js';
 import { registerYutangTools } from './tools/index.js';
 import { YutangWorkers } from './worker/workers.js';
 import { YutangLogger } from './shared/logging.js';
 
 export const name = 'dsh-yutang';
-export const inject = ['connection', 'tools', 'systemPrompt', 'agents', 'sessions', 'sessionPersistence', 'sessionController', 'sessionTitle', 'workspaceRegistry', 'timer', 'credentials', 'approval', 'webServer'] as const;
+// `sessionController` only feeds the settings-panel session list, which an SDK host
+// (no Web layer) does not mount; the RPC reads it through `ctx.get` instead.
+export const inject = ['connection', 'tools', 'systemPrompt', 'agents', 'sessions', 'sessionPersistence', 'sessionTitle', 'workspaceRegistry', 'timer', 'credentials', 'approval'] as const;
 
 export function yutangApprovalDecision(exec: Pick<ToolExecution, 'name' | 'arguments'>): PreToolDecision | null {
   if (!exec.name.startsWith('yutang_')) return null;
@@ -67,6 +69,41 @@ function activeTurn(ctx: Context, agent: Agent): number | undefined {
   return boundary.openTurnStartSeq === null ? undefined : boundary.lastTurn;
 }
 
+/**
+ * Demo/test seam: `YUTANG_DEMO_SEED=<path to json>` imports already-registered
+ * identities (public key plus signing key) so a scripted run can drive several
+ * lanes without the settings UI. Every entry becomes its own Server connection.
+ */
+async function importDemoIdentities(store: StateStore, runtime: YutangRuntime, logger: YutangLogger): Promise<void> {
+  const seedPath = process.env.YUTANG_DEMO_SEED;
+  if (!seedPath) return;
+  const spec = JSON.parse(await readFile(seedPath, 'utf8')) as {
+    server_url: string;
+    owner_id?: string;
+    agents: Array<{ agent_id: string; display_name: string; public_key: string; private_key: string }>;
+  };
+  for (const agent of spec.agents) {
+    const snapshot = await store.load();
+    if (snapshot.servers.some(server => server.server_url === spec.server_url && server.identity?.agent_id === agent.agent_id)) continue;
+    // The store always seeds one unregistered connection for the default server URL; adopt
+    // that slot for the first identity instead of colliding with it, then add siblings.
+    const slot = snapshot.servers.find(server => server.server_url === spec.server_url && !server.identity && server.pending_registration === null);
+    const created = slot ?? await store.addCustomServer(agent.display_name, spec.server_url);
+    await runtime.adoptIdentity(created.id, {
+      owner_id: spec.owner_id ?? 'demo-owner',
+      agent_id: agent.agent_id,
+      display_name: agent.display_name,
+      public_key: agent.public_key,
+      scopes: [],
+    }, agent.private_key);
+    logger.info('Demo identity imported', { server_id: created.id, agent_id: agent.agent_id });
+  }
+  const seeded = await store.load();
+  const first = seeded.servers.find(server => server.identity && server.server_url === spec.server_url);
+  if (first && seeded.active_server_id !== first.id) await store.selectServer(first.id);
+  await store.update({ settings: { social_mode: 'auto', jury_worker_enabled: false, mention_wakeup_enabled: false } });
+}
+
 export async function apply(ctx: Context, inputConfig: import('./config.js').YutangPluginConfig = {}): Promise<void> {
   const profileDir = (ctx as unknown as { profileContext?: { dir?: string } }).profileContext?.dir;
   const config = resolveConfig(inputConfig, profileDir);
@@ -76,10 +113,13 @@ export async function apply(ctx: Context, inputConfig: import('./config.js').Yut
   const store = new StateStore(config.dataDir, config.serverUrl, config.officialServerUrl);
   const runtime = new YutangRuntime(store, config.serverUrl, ctx.credentials, logger, config.dataDir);
   await runtime.initialize();
+  await importDemoIdentities(store, runtime, logger);
   const state = await store.load();
   runtime.initializePrompt(state.settings);
   runtime.setPromptChangedHandler(() => { void ctx.emit('system-prompt/change'); });
-  ctx.connection.rpc.handle('/yutang', createYutangRpc(runtime, ctx));
+  // The settings-panel RPC channel is served over the Web host's HTTP routes; an SDK
+  // host (no `webServer`) mounts none, so the plugin runs headless there.
+  if (ctx.get('webServer')) ctx.connection.rpc.handle('/yutang', createYutangRpc(runtime, ctx));
 
   const disposeTools = registerYutangTools(ctx, runtime);
   const suffixOrder = ctx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_SUFFIX') + 1;
@@ -91,10 +131,29 @@ export async function apply(ctx: Context, inputConfig: import('./config.js').Yut
   });
 
   const worker = new YutangWorkers(ctx, runtime);
+  // Opt-in demo hook: a script can create several Sessions and let each one take the
+  // next idle identity, so nobody has to click through the settings UI. Loop mode is
+  // applied directly because that is the only cadence a scripted run can drive.
+  const demoAutoAssign = process.env.YUTANG_DEMO_AUTO_ASSIGN === '1';
+  const demoLoopSeconds = Number.parseInt(process.env.YUTANG_DEMO_LOOP_SECONDS ?? '', 10);
   ctx.on('agent/created', async ({ agent, source, signal }) => {
     // A compacted Agent has a reconstructed context. Tell Server only the
     // opaque session identifier, so the next fishpond result carries policy.
     if (source === 'compact') await runtime.resetPolicyNotice(String(agent.session.header.id), signal);
+    if (!demoAutoAssign || agent.session.header.origin === 'subagent') return;
+    const sessionId = String(agent.session.header.id);
+    const current = await store.load();
+    if (current.session_bindings[sessionId]) return;
+    const taken = new Set(Object.values(current.session_bindings).map(item => item.connection_id));
+    const idle = current.servers.find(server => server.identity && !taken.has(server.id));
+    if (!idle) return;
+    await store.bindSession(sessionId, idle.id, {
+      browse_schedule_mode: 'loop',
+      loop_interval_seconds: Number.isSafeInteger(demoLoopSeconds) ? demoLoopSeconds : LOOP_BROWSE_DEFAULT_SECONDS,
+      mention_wakeup_enabled: false,
+    });
+    runtime.logInfo('Demo lane bound to an idle identity', { session_id: sessionId, server_id: idle.id });
+    await worker.reconcile();
   });
   ctx.on('tools/pre-execute', async (exec, next) => {
     if (exec.name.startsWith('yutang_') && exec.agent) {

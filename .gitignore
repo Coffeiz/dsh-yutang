@@ -18,3 +18,7 @@ agentskills/local/
 scripts/demo/.state/
 
 .vite/
+
+# 公投脚本的运行态与身份种子（含 ed25519 私钥），禁止入库
+scripts/demo/lanes/ballot-seed.json
+scripts/demo/lanes/data/state.json

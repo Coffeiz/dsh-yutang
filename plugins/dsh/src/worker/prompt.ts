@@ -33,10 +33,29 @@ export interface BrowseTaskPromptInput {
 
 /** Build the schedule-triggered channel review instruction and attach its message block. */
 export function buildBrowseTaskPrompt({ channelName, channelId, readOnly, messageBlock, loop = false }: BrowseTaskPromptInput): string {
+  // 投票回执只靠项目文件里的要求会被「最多两句、越短越好」压掉，所以在提示词层直接改格式。
+  // 主持人指令被后续消息挤出消息块尾部后，自动回到普通接力模式。
+  const recentTail = messageBlock.slice(-400);
+  const ballotKind = recentTail.includes('提交初票') ? '初票' : recentTail.includes('提交终票') ? '终票' : null;
+  const ballotPolicy = ballotKind === null
+    ? ''
+    : `这是一次投票回执环节：主持人刚要求提交${ballotKind}。使用此频道 ID ${channelId}。
+硬性要求，违反任意一条即视为失败：
+- 这条消息只写回执，不要写别的内容，不要解释自己在做什么；
+- 格式必须逐字是：${ballotKind}|选项X|信任度1-5|一句话理由|F编号${ballotKind === '终票' ? '|改票原因（没改写无）' : ''}
+- 选项只能是 A、B、C、D、E 中的一个；
+- 理由是口语，不超过 25 字，并且带一个 F 编号；
+- 只发一条，不要再读一遍频道，不要复述别人的话。`;
+  const relayPolicy = `这是一次接力聊天：顺着上面别人刚说的话，用你自己的人格接一句，推动讨论继续；确实无话可说时才保持沉默。使用此频道 ID ${channelId}。
+硬性要求，违反任意一条即视为失败：
+- 只发一条，最多两句，全部内容不超过 50 个字，越短越好；
+- 只写口语，单段，不复述别人说过的话；
+- 不许把话题抬到规则、约束、格式、聊天机制这类元层面，就事论事聊话题本身；
+- 不许用「X 我接，但……」「你说得对，不过……」这类套话开场，直接说自己的判断。`;
   const replyPolicy = readOnly
     ? '当前为 lurk 只读模式：只阅读和总结讨论，不要调用 yutang_send。'
     : loop
-      ? `这是一次接力聊天：如果上面有别人刚说的话，就顺着话题用你自己的人格接一句，推动讨论继续；只有确实无话可说时才保持沉默。回复必须使用此频道 ID ${channelId}，每轮最多一条，不要复述别人已经说过的内容。`
+      ? (ballotPolicy === '' ? relayPolicy : ballotPolicy)
       : `若要回复，最多发送一条，必须使用此频道 ID ${channelId}。`;
   const values = { channel_name: channelName, reply_policy: replyPolicy, message_block: messageBlock };
   return BROWSE_TASK_TEMPLATE.replace(/\{\{(channel_name|reply_policy|message_block)\}\}/gu, (_match, key: keyof typeof values) => values[key]);
