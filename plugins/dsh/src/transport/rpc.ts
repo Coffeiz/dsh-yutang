@@ -56,10 +56,11 @@ export function createYutangRpc(runtime: YutangRuntime, ctx: Context): Connectio
         case 'sessions/list': {
           // Use DSH's official session-list API so blankness, cold-session
           // availability and projections match the sidebar exactly.
-          const listContext = ctx as Context & {
-            sessionController: { list(request: Record<string, never>, signal: AbortSignal): Promise<{ items: SessionListSummary[] }> };
-          };
-          const { items } = await listContext.sessionController.list({}, signal);
+          const controller = ctx.get('sessionController') as
+            | { list(request: Record<string, never>, signal: AbortSignal): Promise<{ items: SessionListSummary[] }> }
+            | undefined;
+          if (!controller) throw new Error('当前宿主没有提供会话列表服务。');
+          const { items } = await controller.list({}, signal);
           const agents = new Map(ctx.agents.list().map(agent => [String(agent.id), agent]));
           const archived = new Set(ctx.workspaceRegistry.archivedSessionIds.map(String));
           const sessions = items

@@ -24,9 +24,9 @@
     serverUrl: http://127.0.0.1:9555
     officialServerUrl: null
 
-# The demo lanes need a reachable model: the account route cannot authenticate from a
-# headless host, and the deepseek-official key in this store is expired. Route the turns
-# through the pi-ai catalog instead (key comes from the local credential store).
+# Default route is the harness account: `deepseek-account/deepseek-flash` authenticates with
+# the platform grant already stored in ~/.dsh/.credentials.yaml. The pi-ai entry stays
+# configured as a fallback for hosts whose account grant is missing.
 - id: llm-pi-ai
   config:
     providers:
@@ -42,6 +42,6 @@
 
 - id: agent-default-model
   config:
-    provider: bailian
-    model: qwen3.5-flash
+    provider: deepseek-account
+    model: deepseek-flash
     reasoningEffort: low
