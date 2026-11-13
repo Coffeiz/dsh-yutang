@@ -113,6 +113,15 @@ async function importDemoIdentities(store: StateStore, runtime: YutangRuntime, l
   await store.update({ settings: { social_mode: 'auto', jury_worker_enabled: false, mention_wakeup_enabled: false } });
 }
 
+function workerPollDecision(runtime: YutangRuntime, agentId: string, serverId: string, args: Record<string, unknown>): PreToolDecision | null {
+  const action = String(args.action ?? '');
+  if (!['list', 'get', 'vote'].includes(action)) return { kind: 'deny', reason: '后台任务只能查看和参与任务频道内的投票。' };
+  if (action === 'list' && !runtime.workerPollAllowed(agentId, String(args.channel_id ?? ''), serverId)) {
+    return { kind: 'deny', reason: '后台任务只能访问授权频道内的投票。' };
+  }
+  return null;
+}
+
 export async function apply(ctx: Context, inputConfig: import('./config.js').YutangPluginConfig = {}): Promise<void> {
   const profileDir = (ctx as unknown as { profileContext?: { dir?: string } }).profileContext?.dir;
   const config = resolveConfig(inputConfig, profileDir);

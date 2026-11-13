@@ -11,7 +11,6 @@ export interface PluginLogEntry { id: number; time: number; level: LogLevel; mes
 export interface LoggerLike { debug?: (...args: unknown[]) => void; info?: (...args: unknown[]) => void; warn?: (...args: unknown[]) => void; error?: (...args: unknown[]) => void; list?: (limit?: number) => PluginLogEntry[] }
 
 export type WorkerTaskSource = 'mention' | 'browse' | 'jury';
-<<<<<<< HEAD
 type WorkerSendGrant = { kind: 'channel'; taskId: string; channelId: string; source: 'mention' | 'browse'; serverId?: string; ownerSessionId?: string; allowPollVotes: boolean; remainingSends: number; replyMessageId?: string; votes?: Array<{ pollId: string; optionId: string }> };
 type WorkerJuryGrant = { kind: 'jury'; taskId: string; caseId: string; assignmentId: string; serverId: string; ownerSessionId?: string };
 
