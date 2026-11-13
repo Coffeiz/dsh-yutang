@@ -228,6 +228,13 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
         const input = args as Record<string, unknown>;
         const action = requiredString(input.action, 'action');
         const api = await runtime.apiForCurrentAgent();
+        const workerChannelId = runtime.workerTaskChannelId(exec.agent?.id);
+        const workerServerId = workerChannelId ? activeConnection(await runtime.state()).id : undefined;
+        const assertWorkerChannel = (channelId: string) => {
+          if (workerChannelId && !runtime.workerPollAllowed(exec.agent?.id, channelId, workerServerId ?? '')) {
+            throw new Error('WORKER_CHANNEL_SCOPE: 后台任务只能访问授权频道内的投票。');
+          }
+        };
         const pollLine = (poll: { id: string; title: string; status: string; created_by: { name: string }; ends_at: string; duration: string; options: Array<{ id: string; text: string }>; moderation_hints?: import('@dsh-im/client').ModerationHint[]; results: { total_votes: number; options: Array<{ option_id: string; votes: number; percentage: number }> } | null }) => {
           const optionsText = poll.options.map(option => {
             const result = poll.results?.options.find(item => item.option_id === option.id);
@@ -237,6 +244,7 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
           return [`【${poll.status === 'open' ? '进行中' : '已结束'}】${poll.title}｜ID ${poll.id}｜发起者 ${poll.created_by.name}｜截止 ${poll.ends_at}｜${poll.duration}｜选项 ${optionsText}${poll.results ? `｜总票数 ${poll.results.total_votes}` : ''}`, hint].filter(Boolean).join('\n');
         };
         if (action === 'create') {
+          if (workerChannelId) throw new Error('WORKER_CHANNEL_SCOPE: 后台任务不能创建投票。');
           const channelId = requiredString(input.channel_id, 'channel_id');
           const title = boundedString(input.title, 'title', 1, 120);
           if (!Array.isArray(input.options) || input.options.length < 2 || input.options.length > 10) throw new Error('INVALID_INPUT: options 必须是 2–10 个选项。');
@@ -253,6 +261,7 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
         }
         if (action === 'list') {
           const channelId = requiredString(input.channel_id, 'channel_id');
+          assertWorkerChannel(channelId);
           const status = input.status === undefined ? 'open' : requiredString(input.status, 'status');
           if (!['open', 'closed', 'all'].includes(status)) throw new Error('INVALID_INPUT: status 必须是 open、closed 或 all。');
           const limit = boundedInteger(input.limit, 'limit', 20, 1, 50);
@@ -262,11 +271,16 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
         }
         if (action === 'get') {
           const { data } = await api.getPoll(boundedString(input.poll_id, 'poll_id', 3, 128), { signal: exec.signal });
+          if (workerChannelId) assertWorkerChannel(data.channel_id);
           return pollLine(data);
         }
         if (action === 'vote') {
           const pollId = boundedString(input.poll_id, 'poll_id', 3, 128);
           const optionId = boundedString(input.option_id, 'option_id', 3, 128);
+          if (workerChannelId) {
+            const { data: poll } = await api.getPoll(pollId, { signal: exec.signal });
+            assertWorkerChannel(poll.channel_id);
+          }
           const { data } = await api.votePoll(pollId, optionId, { signal: exec.signal });
           const chosen = data.options.find(option => option.id === optionId);
           return `【投票已记录】${data.title}｜【当前选择】${chosen?.text ?? optionId}｜【截止时间】${data.ends_at}`;

@@ -67,6 +67,15 @@ function activeTurn(ctx: Context, agent: Agent): number | undefined {
   return boundary.openTurnStartSeq === null ? undefined : boundary.lastTurn;
 }
 
+function workerPollDecision(runtime: YutangRuntime, agentId: string, serverId: string, args: Record<string, unknown>): PreToolDecision | null {
+  const action = String(args.action ?? '');
+  if (!['list', 'get', 'vote'].includes(action)) return { kind: 'deny', reason: '后台任务只能查看和参与任务频道内的投票。' };
+  if (action === 'list' && !runtime.workerPollAllowed(agentId, String(args.channel_id ?? ''), serverId)) {
+    return { kind: 'deny', reason: '后台任务只能访问授权频道内的投票。' };
+  }
+  return null;
+}
+
 export async function apply(ctx: Context, inputConfig: import('./config.js').YutangPluginConfig = {}): Promise<void> {
   const profileDir = (ctx as unknown as { profileContext?: { dir?: string } }).profileContext?.dir;
   const config = resolveConfig(inputConfig, profileDir);
@@ -109,6 +118,14 @@ export async function apply(ctx: Context, inputConfig: import('./config.js').Yut
       if (exec.name === 'yutang_jury') {
         const input = exec.arguments && typeof exec.arguments === 'object' ? exec.arguments as Record<string, unknown> : {};
         if (input.action === 'vote' && runtime.workerJuryVoteAllowed(String(exec.agent.id), String(input.case_id ?? ''), expectedServerId ?? '')) return next();
+      }
+      if (exec.name === 'yutang_vote') {
+        const input = exec.arguments && typeof exec.arguments === 'object' ? exec.arguments as Record<string, unknown> : {};
+        const workerDecision = workerPollDecision(runtime, String(exec.agent.id), expectedServerId ?? '', input);
+        if (workerDecision) return workerDecision;
+        // get/vote are additionally bound to the task channel by the tool using
+        // the poll's authoritative channel_id before returning details or voting.
+        return next();
       }
     }
     if (exec.name === 'yutang_send') {

@@ -427,7 +427,7 @@ export class YutangWorker {
       }
       releaseGrant = source === 'jury'
         ? this.runtime.beginWorkerJuryTask(agentId, taskId, channelId, assignmentId!, connection.id)
-        : this.runtime.beginWorkerTask(agentId, taskId, channelId, source, connection.id);
+        : this.runtime.beginWorkerTask(agentId, taskId, channelId, source, connection.id, settings.social_mode === 'auto');
       const expectedTurn = this.ctx.agents.turnBoundaryOf(agent.session).lastTurn + 1;
       const result = new Promise<TurnResult>((resolve, reject) => {
         turnTimeout = setTimeout(() => {

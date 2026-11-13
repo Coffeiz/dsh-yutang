@@ -11,7 +11,7 @@ export interface PluginLogEntry { id: number; time: number; level: LogLevel; mes
 export interface LoggerLike { debug?: (...args: unknown[]) => void; info?: (...args: unknown[]) => void; warn?: (...args: unknown[]) => void; error?: (...args: unknown[]) => void; list?: (limit?: number) => PluginLogEntry[] }
 
 export type WorkerTaskSource = 'mention' | 'browse' | 'jury';
-type WorkerSendGrant = { kind: 'channel'; taskId: string; channelId: string; source: 'mention' | 'browse'; serverId?: string; remainingSends: number; replyMessageId?: string };
+type WorkerSendGrant = { kind: 'channel'; taskId: string; channelId: string; source: 'mention' | 'browse'; serverId?: string; allowPollVotes: boolean; remainingSends: number; replyMessageId?: string };
 type WorkerJuryGrant = { kind: 'jury'; taskId: string; caseId: string; assignmentId: string; serverId: string };
 
 export class YutangRuntime {
@@ -74,9 +74,9 @@ export class YutangRuntime {
       this.logger.warn?.('dsh-yutang could not remember the last used session', error);
     }
   }
-  beginWorkerTask(agentId: string, taskId: string, channelId: string, source: WorkerTaskSource, serverId?: string) {
+  beginWorkerTask(agentId: string, taskId: string, channelId: string, source: WorkerTaskSource, serverId?: string, allowPollVotes = false) {
     if (source === 'jury') throw new Error('jury tasks require a case-bound grant');
-    this.workerGrants.set(agentId, { kind: 'channel', taskId, channelId, source, ...(serverId ? { serverId } : {}), remainingSends: 1 });
+    this.workerGrants.set(agentId, { kind: 'channel', taskId, channelId, source, ...(serverId ? { serverId } : {}), allowPollVotes, remainingSends: 1 });
     return () => { this.workerGrants.delete(agentId); };
   }
   beginWorkerJuryTask(agentId: string, taskId: string, caseId: string, assignmentId: string, serverId: string) {
@@ -119,14 +119,23 @@ export class YutangRuntime {
     return grant?.kind === 'jury' ? { caseId: grant.caseId, assignmentId: grant.assignmentId, serverId: grant.serverId } : undefined;
   }
   workerJuryVoteAllowed(agentId: string | undefined, caseId: string, serverId: string) {
+    return this.workerGrantMatches(agentId, 'jury', caseId, serverId);
+  }
+  workerPollAllowed(agentId: string | undefined, channelId: string, serverId: string) {
     const grant = agentId ? this.workerGrants.get(agentId) : undefined;
-    return grant?.kind === 'jury' && grant.caseId === caseId && grant.serverId === serverId;
+    return grant?.kind === 'channel' && grant.allowPollVotes && this.workerGrantMatches(agentId, 'channel', channelId, serverId);
+  }
+  private workerGrantMatches(agentId: string | undefined, kind: 'channel' | 'jury', targetId: string, serverId: string) {
+    const grant = agentId ? this.workerGrants.get(agentId) : undefined;
+    if (!grant || grant.kind !== kind) return false;
+    const grantTargetId = grant.kind === 'jury' ? grant.caseId : grant.channelId;
+    return grantTargetId === targetId && grant.serverId === serverId;
   }
   workerToolAllowed(agentId: string | undefined, toolName: string) {
     if (!agentId) return true;
     const grant = this.workerGrants.get(agentId);
     if (!grant) return true;
-    return grant.kind === 'jury' ? toolName === 'yutang_jury' : toolName === 'yutang_read' || toolName === 'yutang_send';
+    return grant.kind === 'jury' ? toolName === 'yutang_jury' : toolName === 'yutang_read' || toolName === 'yutang_send' || toolName === 'yutang_vote' && grant.allowPollVotes;
   }
   async consumePolicyNotice(sessionId: string, signal?: AbortSignal) {
     try {

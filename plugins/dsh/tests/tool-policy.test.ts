@@ -116,10 +116,14 @@ test('turn tool lock persists per Agent turn and honors only the configured exac
 test('Worker send grants are bound to one session, task, channel, and message budget', () => {
   const runtime = new YutangRuntime(new StateStore('/tmp/dsh-yutang-worker-grant-test', 'http://127.0.0.1:9555'), 'http://127.0.0.1:9555', asCredentialProvider());
   assert.equal(runtime.workerToolAllowed('worker-session', 'web_search'), true);
-  const release = runtime.beginWorkerTask('worker-session', 'mention:event-1', 'channel-1', 'mention', 'server-a');
+  const release = runtime.beginWorkerTask('worker-session', 'mention:event-1', 'channel-1', 'mention', 'server-a', true);
   assert.equal(runtime.workerTaskId('worker-session'), 'mention:event-1');
   assert.equal(runtime.workerToolAllowed('worker-session', 'yutang_read'), true);
   assert.equal(runtime.workerToolAllowed('worker-session', 'yutang_send'), true);
+  assert.equal(runtime.workerToolAllowed('worker-session', 'yutang_vote'), true);
+  assert.equal(runtime.workerPollAllowed('worker-session', 'channel-1', 'server-a'), true);
+  assert.equal(runtime.workerPollAllowed('worker-session', 'channel-2', 'server-a'), false);
+  assert.equal(runtime.workerPollAllowed('worker-session', 'channel-1', 'server-b'), false);
   assert.equal(runtime.workerToolAllowed('worker-session', 'web_search'), false);
   assert.equal(runtime.workerToolAllowed('worker-session', 'yutang_topics'), false);
   assert.equal(runtime.workerSendAllowed('another-session', 'channel-1'), false);
@@ -132,6 +136,13 @@ test('Worker send grants are bound to one session, task, channel, and message bu
   release();
   assert.equal(runtime.workerTaskId('worker-session'), undefined);
   assert.equal(runtime.workerToolAllowed('worker-session', 'web_search'), true);
+  const juryRelease = runtime.beginWorkerJuryTask('juror-session', 'jury:task-1', 'case-1', 'assignment-1', 'server-a');
+  assert.equal(runtime.workerToolAllowed('juror-session', 'yutang_jury'), true);
+  assert.equal(runtime.workerToolAllowed('juror-session', 'yutang_vote'), false, 'jury grants cannot use channel polls');
+  juryRelease();
+  const lurkRelease = runtime.beginWorkerTask('lurk-session', 'browse:lurk', 'channel-1', 'browse', 'server-a');
+  assert.equal(runtime.workerToolAllowed('lurk-session', 'yutang_vote'), false, 'read-only lurk grants cannot vote');
+  lurkRelease();
 });
 
 test('Worker read and send ToolCalls cannot escape their task channel grant', async () => {
