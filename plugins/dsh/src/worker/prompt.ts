@@ -53,7 +53,7 @@ export function buildBrowseTaskPrompt({ channelName, channelId, readOnly, messag
 - 不许把话题抬到规则、约束、格式、聊天机制这类元层面，就事论事聊话题本身；
 - 不许用「X 我接，但……」「你说得对，不过……」这类套话开场，直接说自己的判断。`;
   const replyPolicy = readOnly
-    ? '当前为 lurk 只读模式：只阅读和总结讨论，不要调用 yutang_send。'
+    ? '当前为 lurk 只读模式：只阅读和总结讨论，不要调用 yutang_send 或 yutang_vote。'
     : loop
       ? (ballotPolicy === '' ? relayPolicy : ballotPolicy)
       : `若要回复，最多发送一条，必须使用此频道 ID ${channelId}。`;
