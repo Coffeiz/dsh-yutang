@@ -171,6 +171,28 @@ test('Worker read and send ToolCalls cannot escape their task channel grant', as
   }
 });
 
+test('Worker vote stops when social mode changes during poll lookup', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-yutang-vote-mode-'));
+  const runtime = new YutangRuntime(new StateStore(dataDir, 'http://127.0.0.1:9555'), 'http://127.0.0.1:9555', asCredentialProvider());
+  const tools = new Map<string, { name: string; execute(args: unknown, exec: Record<string, unknown>): Promise<unknown> }>();
+  const ctx = { tools: { register(tool: { name: string; execute(args: unknown, exec: Record<string, unknown>): Promise<unknown> }) { tools.set(tool.name, tool); return () => {}; } } } as unknown as Context;
+  let votes = 0;
+  try {
+    await runtime.updateSettings({ social_mode: 'auto' });
+    const serverId = activeConnection(await runtime.state()).id;
+    const release = runtime.beginWorkerTask('worker', 'task', 'channel-1', 'browse', serverId, true);
+    Object.defineProperty(runtime, 'apiForCurrentAgent', { value: async () => ({
+      getPoll: async () => { await runtime.updateSettings({ social_mode: 'lurk' }); return { data: { channel_id: 'channel-1' } }; },
+      votePoll: async () => { votes++; return {}; },
+    }) });
+    registerYutangTools(ctx, runtime);
+    const result = String(await tools.get('yutang_vote')!.execute({ action: 'vote', poll_id: 'poll-1', option_id: 'option-1' }, { callId: 'vote', signal: AbortSignal.timeout(1000), agent: { id: 'worker' } }));
+    assert.match(result, /SOCIAL_MODE_BLOCKED/u);
+    assert.equal(votes, 0);
+    release();
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
 test('off mode blocks every network tool while status remains local', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-yutang-off-mode-'));
   const runtime = new YutangRuntime(new StateStore(dataDir, 'http://127.0.0.1:9555'), 'http://127.0.0.1:9555', asCredentialProvider());

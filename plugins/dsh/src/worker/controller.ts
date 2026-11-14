@@ -36,6 +36,7 @@ export class YutangWorker {
   private pollInProgress = false;
   private inboxClaimRunning = false;
   private activeTaskSource: WorkerTaskSource | undefined;
+  private activeTaskMode: string | undefined;
   private stopActiveMentionLease: (() => void) | undefined;
   private stopped = false;
   private socket: WebSocket | undefined;
@@ -71,7 +72,7 @@ export class YutangWorker {
         this.pendingServerId = undefined;
       }
       const taskDisabled = !state.settings.scheduled_session_id || (this.activeTaskSource === 'browse'
-        ? !['auto', 'lurk'].includes(state.settings.social_mode) || state.settings.browse_schedule_mode === 'off'
+        ? !['auto', 'lurk'].includes(state.settings.social_mode) || state.settings.browse_schedule_mode === 'off' || this.activeTaskMode === 'auto' && state.settings.social_mode !== 'auto'
         : this.activeTaskSource === 'mention'
           ? state.settings.social_mode !== 'auto' || !state.settings.mention_wakeup_enabled
           : this.activeTaskSource === 'jury'
@@ -418,6 +419,7 @@ export class YutangWorker {
       if (expectedServerId !== undefined && connection.id !== expectedServerId) throw new Error('Server 连接已切换，已丢弃旧连接任务。');
       if (state.settings.scheduled_session_id !== selectedSessionId) throw new Error('定时会话已更改，已跳过当前任务。');
       const settings = state.settings;
+      this.activeTaskMode = settings.social_mode;
       if (source === 'browse' && (!['auto', 'lurk'].includes(settings.social_mode) || settings.browse_schedule_mode === 'off')
         || source === 'mention' && (settings.social_mode !== 'auto' || !settings.mention_wakeup_enabled)
         || source === 'jury' && (!assignmentId || settings.social_mode === 'off'
@@ -463,6 +465,7 @@ export class YutangWorker {
       releaseGrant();
       this.taskAgent = undefined;
       this.activeTaskSource = undefined;
+      this.activeTaskMode = undefined;
       this.taskRunning = false;
       if (handle) await handle.dispose().catch(error => this.noteError(error));
     }
