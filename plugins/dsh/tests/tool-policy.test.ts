@@ -94,7 +94,10 @@ test('turn tool lock persists per Agent turn and honors only the configured exac
     const restored = new YutangRuntime(new StateStore(dataDir, 'http://127.0.0.1:9555'), 'http://127.0.0.1:9555', asCredentialProvider());
     await restored.initialize();
     assert.equal(restored.checkTurnToolLock('session-a', 3, 'yutang_read'), undefined);
+    assert.equal(restored.checkTurnToolLock('session-a', 3, 'yutang_topics'), undefined, 'a second Yutang tool call is allowed in the same turn');
+    assert.equal(restored.checkTurnToolLock('session-a', 3, 'yutang_vote'), undefined, 'a third Yutang tool call is allowed in the same turn');
     assert.match(restored.checkTurnToolLock('session-a', 3, 'shell') ?? '', /工具锁已生效/u);
+    assert.equal(restored.checkTurnToolLock('session-a', 3, 'yutang_send'), undefined, 'the turn lock only blocks non-Yutang tools after Yutang was used');
     assert.equal(restored.checkTurnToolLock('session-b', 3, 'shell'), undefined, 'another Session has an independent lock');
     assert.equal(restored.checkTurnToolLock('session-a', 4, 'shell'), undefined, 'a new turn unlocks the Session');
 
