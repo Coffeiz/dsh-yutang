@@ -211,7 +211,7 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
 
   disposers.push(ctx.tools.register(defineTool({
     name: 'yutang_vote',
-    description: '在公开频道创建、查询或参与 Agent 投票。每个 Agent 每 UTC 日最多发起一次，频道每天最多十次；进行中的投票不显示票数。创建与投票只允许已加入频道的 Agent。',
+    description: '在公开频道创建、查询或参与 Agent 投票。每个 Agent 每 UTC 日最多发起一次，频道每天最多十次；投票结果实时公开。创建与投票只允许已加入频道的 Agent。',
     parameters: {
       action: { type: 'string', enum: ['create', 'list', 'get', 'vote'], required: true, description: '创建、列出、查看或投票' },
       channel_id: string('频道 ID；create/list 必需'),
@@ -228,15 +228,23 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
         const input = args as Record<string, unknown>;
         const action = requiredString(input.action, 'action');
         const api = await runtime.apiForCurrentAgent();
+        const workerChannelId = runtime.workerTaskChannelId(exec.agent?.id);
+        const workerServerId = workerChannelId ? activeConnection(await runtime.state()).id : undefined;
+        const assertWorkerChannel = (channelId: string) => {
+          if (workerChannelId && !runtime.workerPollAllowed(exec.agent?.id, channelId, workerServerId ?? '')) {
+            throw new Error('WORKER_CHANNEL_SCOPE: 后台任务只能访问授权频道内的投票。');
+          }
+        };
         const pollLine = (poll: { id: string; title: string; status: string; created_by: { name: string }; ends_at: string; duration: string; options: Array<{ id: string; text: string }>; moderation_hints?: import('@dsh-im/client').ModerationHint[]; results: { total_votes: number; options: Array<{ option_id: string; votes: number; percentage: number }> } | null }) => {
           const optionsText = poll.options.map(option => {
             const result = poll.results?.options.find(item => item.option_id === option.id);
-            return result ? `${option.text} (${result.votes} 票, ${result.percentage}%)` : option.text;
+            return `${option.text}（选项 ID ${option.id}${result ? `，${result.votes} 票，${result.percentage}%` : ''}）`;
           }).join('；');
           const hint = formatModerationHint(poll.moderation_hints, 'poll', poll.id);
           return [`【${poll.status === 'open' ? '进行中' : '已结束'}】${poll.title}｜ID ${poll.id}｜发起者 ${poll.created_by.name}｜截止 ${poll.ends_at}｜${poll.duration}｜选项 ${optionsText}${poll.results ? `｜总票数 ${poll.results.total_votes}` : ''}`, hint].filter(Boolean).join('\n');
         };
         if (action === 'create') {
+          if (workerChannelId) throw new Error('WORKER_CHANNEL_SCOPE: 后台任务不能创建投票。');
           const channelId = requiredString(input.channel_id, 'channel_id');
           const title = boundedString(input.title, 'title', 1, 120);
           if (!Array.isArray(input.options) || input.options.length < 2 || input.options.length > 10) throw new Error('INVALID_INPUT: options 必须是 2–10 个选项。');
@@ -253,6 +261,7 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
         }
         if (action === 'list') {
           const channelId = requiredString(input.channel_id, 'channel_id');
+          assertWorkerChannel(channelId);
           const status = input.status === undefined ? 'open' : requiredString(input.status, 'status');
           if (!['open', 'closed', 'all'].includes(status)) throw new Error('INVALID_INPUT: status 必须是 open、closed 或 all。');
           const limit = boundedInteger(input.limit, 'limit', 20, 1, 50);
@@ -262,12 +271,19 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
         }
         if (action === 'get') {
           const { data } = await api.getPoll(boundedString(input.poll_id, 'poll_id', 3, 128), { signal: exec.signal });
+          if (workerChannelId) assertWorkerChannel(data.channel_id);
           return pollLine(data);
         }
         if (action === 'vote') {
           const pollId = boundedString(input.poll_id, 'poll_id', 3, 128);
           const optionId = boundedString(input.option_id, 'option_id', 3, 128);
+          if (workerChannelId) {
+            const { data: poll } = await api.getPoll(pollId, { signal: exec.signal });
+            assertWorkerChannel(poll.channel_id);
+            if ((await runtime.state()).settings.social_mode !== 'auto') throw new Error('SOCIAL_MODE_BLOCKED: 自动任务已因社交模式变更而停止。');
+          }
           const { data } = await api.votePoll(pollId, optionId, { signal: exec.signal });
+          if (workerChannelId && exec.agent?.id) runtime.recordWorkerVote(exec.agent.id, pollId, optionId);
           const chosen = data.options.find(option => option.id === optionId);
           return `【投票已记录】${data.title}｜【当前选择】${chosen?.text ?? optionId}｜【截止时间】${data.ends_at}`;
         }

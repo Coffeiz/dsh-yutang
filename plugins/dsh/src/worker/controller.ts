@@ -36,6 +36,7 @@ export class YutangWorker {
   private pollInProgress = false;
   private inboxClaimRunning = false;
   private activeTaskSource: WorkerTaskSource | undefined;
+  private activeTaskMode: string | undefined;
   private stopActiveMentionLease: (() => void) | undefined;
   private stopped = false;
   private socket: WebSocket | undefined;
@@ -71,7 +72,7 @@ export class YutangWorker {
         this.pendingServerId = undefined;
       }
       const taskDisabled = !state.settings.scheduled_session_id || (this.activeTaskSource === 'browse'
-        ? !['auto', 'lurk'].includes(state.settings.social_mode) || state.settings.browse_schedule_mode === 'off'
+        ? !['auto', 'lurk'].includes(state.settings.social_mode) || state.settings.browse_schedule_mode === 'off' || this.activeTaskMode === 'auto' && state.settings.social_mode !== 'auto'
         : this.activeTaskSource === 'mention'
           ? state.settings.social_mode !== 'auto' || !state.settings.mention_wakeup_enabled
           : this.activeTaskSource === 'jury'
@@ -418,6 +419,7 @@ export class YutangWorker {
       if (expectedServerId !== undefined && connection.id !== expectedServerId) throw new Error('Server 连接已切换，已丢弃旧连接任务。');
       if (state.settings.scheduled_session_id !== selectedSessionId) throw new Error('定时会话已更改，已跳过当前任务。');
       const settings = state.settings;
+      this.activeTaskMode = settings.social_mode;
       if (source === 'browse' && (!['auto', 'lurk'].includes(settings.social_mode) || settings.browse_schedule_mode === 'off')
         || source === 'mention' && (settings.social_mode !== 'auto' || !settings.mention_wakeup_enabled)
         || source === 'jury' && (!assignmentId || settings.social_mode === 'off'
@@ -427,7 +429,7 @@ export class YutangWorker {
       }
       releaseGrant = source === 'jury'
         ? this.runtime.beginWorkerJuryTask(agentId, taskId, channelId, assignmentId!, connection.id)
-        : this.runtime.beginWorkerTask(agentId, taskId, channelId, source, connection.id);
+        : this.runtime.beginWorkerTask(agentId, taskId, channelId, source, connection.id, settings.social_mode === 'auto');
       const expectedTurn = this.ctx.agents.turnBoundaryOf(agent.session).lastTurn + 1;
       const result = new Promise<TurnResult>((resolve, reject) => {
         turnTimeout = setTimeout(() => {
@@ -448,7 +450,7 @@ export class YutangWorker {
       await this.ctx.sessions.flush(agent.session);
       if (outcome.kind !== 'completed') throw new Error(`worker turn ended with ${outcome.reason}`);
       const replyMessageId = this.runtime.workerReplyMessageId(agentId);
-      await this.recordTaskSummary(selectedSessionId, source, channelId, replyMessageId);
+      await this.recordTaskSummary(selectedSessionId, source, channelId, replyMessageId, this.runtime.workerVotes(agentId));
       this.lastWorkerError = undefined;
       return { processed: true, ...(replyMessageId ? { replyMessageId } : {}) };
     } catch (error) {
@@ -463,12 +465,13 @@ export class YutangWorker {
       releaseGrant();
       this.taskAgent = undefined;
       this.activeTaskSource = undefined;
+      this.activeTaskMode = undefined;
       this.taskRunning = false;
       if (handle) await handle.dispose().catch(error => this.noteError(error));
     }
   }
 
-  private async recordTaskSummary(sessionId: string, source: WorkerTaskSource, channelId: string, replyMessageId?: string) {
+  private async recordTaskSummary(sessionId: string, source: WorkerTaskSource, channelId: string, replyMessageId?: string, votes: Array<{ pollId: string; optionId: string }> = []) {
     let handle: AgentHandle | undefined;
     try {
       const state = await this.runtime.state();
@@ -484,8 +487,9 @@ export class YutangWorker {
       const label = source === 'browse' ? '频道巡看' : source === 'mention' ? '@ 消息处理' : '陪审任务';
       const detail = source === 'jury' ? '' : `；频道 ${channelId}`;
       const reply = replyMessageId ? `；公开回复消息 ID ${replyMessageId}` : '；未发送公开回复';
+      const voteSummary = votes.length ? `；投票 ${votes.length} 次：${votes.map(vote => `投票 ID ${vote.pollId}，选项 ID ${vote.optionId}`).join('；')}` : '';
       target.session.append('user/message', createUserMessage({
-        content: [{ type: 'text', text: `【鱼塘后台任务记录】已完成${label}${detail}${reply}。任务上下文已与此会话历史隔离。` }],
+        content: [{ type: 'text', text: `【鱼塘后台任务记录】已完成${label}${detail}${reply}${voteSummary}。任务上下文已与此会话历史隔离。` }],
         source: { kind: 'user' },
       }), { surfaceOp: 'append' });
       await this.ctx.sessions.flush(target.session);

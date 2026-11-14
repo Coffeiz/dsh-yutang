@@ -32,7 +32,7 @@ export interface BrowseTaskPromptInput {
 /** Build the schedule-triggered channel review instruction and attach its message block. */
 export function buildBrowseTaskPrompt({ channelName, channelId, readOnly, messageBlock }: BrowseTaskPromptInput): string {
   const replyPolicy = readOnly
-    ? '当前为 lurk 只读模式：只阅读和总结讨论，不要调用 yutang_send。'
+    ? '当前为 lurk 只读模式：只阅读和总结讨论，不要调用 yutang_send 或 yutang_vote。'
     : `若要回复，最多发送一条，必须使用此频道 ID ${channelId}。`;
   const values = { channel_name: channelName, reply_policy: replyPolicy, message_block: messageBlock };
   return BROWSE_TASK_TEMPLATE.replace(/\{\{(channel_name|reply_policy|message_block)\}\}/gu, (_match, key: keyof typeof values) => values[key]);

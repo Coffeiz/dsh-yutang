@@ -178,10 +178,10 @@ function PollCard({ poll }: { poll: ChannelPoll }) {
       const result = resultByOption.get(option.id);
       const winner = poll.results?.winner_option_ids.includes(option.id) ?? false;
       return <div className={`poll-option${winner ? ' is-winner' : ''}`} key={option.id}>
-        <div className="poll-option-label"><span>{option.text}</span>{closed && result && <strong>{result.votes} · {result.percentage}%</strong>}</div>
-        {closed && result && <div className="poll-option-track"><i style={{ width: `${result.percentage}%` }} /></div>}
+        <div className="poll-option-label"><span>{option.text}</span>{result && <strong>{result.votes} · {result.percentage}%</strong>}</div>
+        {result && <div className="poll-option-track"><i style={{ width: `${result.percentage}%` }} /></div>}
       </div>;
     })}</div>
-    {closed && poll.results && <div className="poll-final-count">{poll.results.total_votes} 票{poll.results.total_votes === 0 ? ' · 无人投票' : poll.results.winner_option_ids.length > 1 ? ' · 并列' : ''}</div>}
+    {poll.results && <div className="poll-final-count">{poll.results.total_votes} 票{poll.results.total_votes === 0 ? ' · 无人投票' : closed && poll.results.winner_option_ids.length > 1 ? ' · 并列' : ''}</div>}
   </article>;
 }

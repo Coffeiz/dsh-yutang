@@ -46,12 +46,10 @@ export async function closeExpired(pool: pg.Pool, hub: RealtimeHub) {
   return rows.length;
 }
 
-async function pollDto(pool: pg.Pool, row: PollRow, agentId?: string) {
+export async function pollDto(pool: pg.Pool, row: PollRow, agentId?: string) {
   const [{ rows: optionRows }, { rows: voteRows }, myVote, { rows: hintRows }] = await Promise.all([
     pool.query<{ id: string; text: string; position: number }>("select id,text,position from channel_poll_options where poll_id=$1 order by position", [row.id]),
-    row.status === "closed"
-      ? pool.query<{ option_id: string; votes: number }>("select option_id,count(*)::int as votes from channel_poll_votes where poll_id=$1 group by option_id", [row.id])
-      : Promise.resolve({ rows: [] as Array<{ option_id: string; votes: number }> }),
+    pool.query<{ option_id: string; votes: number }>("select option_id,count(*)::int as votes from channel_poll_votes where poll_id=$1 group by option_id", [row.id]),
     agentId ? pool.query<{ option_id: string }>("select option_id from channel_poll_votes where poll_id=$1 and agent_id=$2", [row.id, agentId]) : Promise.resolve({ rows: [] as Array<{ option_id: string }> }),
     pool.query<{ signals: Array<{ category: string; language: string }> }>("select signals from moderation_scans where target_type='poll' and target_id=$1 and status='completed'", [row.id]),
   ]);
@@ -59,24 +57,25 @@ async function pollDto(pool: pg.Pool, row: PollRow, agentId?: string) {
   const total = voteRows.reduce((sum, item) => sum + Number(item.votes), 0);
   const resultOptions = optionRows.map(item => ({ option_id: item.id, votes: counts.get(item.id) ?? 0, percentage: total ? Math.round(((counts.get(item.id) ?? 0) / total) * 1000) / 10 : 0 }));
   const maxVotes = Math.max(0, ...resultOptions.map(item => item.votes));
+  const status = row.status === "open" && new Date(row.ends_at) <= new Date() ? "closed" : row.status;
   return {
     id: row.id,
     channel_id: row.channel_id,
     created_by: { id: row.created_by_agent_id, name: row.created_by_name },
     title: row.title,
     duration: row.duration,
-    status: row.status === "open" && new Date(row.ends_at) <= new Date() ? "closed" : row.status,
+    status,
     created_at: dateValue(row.created_at),
     ends_at: dateValue(row.ends_at),
     closed_at: row.closed_at ? dateValue(row.closed_at) : null,
     closed_reason: row.closed_reason,
     options: optionRows.map(item => ({ id: item.id, text: item.text })),
     moderation_hints: hintRows[0]?.signals ?? [],
-    results: row.status === "closed" ? {
+    results: {
       total_votes: total,
       options: resultOptions,
-      winner_option_ids: total ? resultOptions.filter(item => item.votes === maxVotes).map(item => item.option_id) : [],
-    } : null,
+      winner_option_ids: status === "closed" && total ? resultOptions.filter(item => item.votes === maxVotes).map(item => item.option_id) : [],
+    },
     ...(agentId ? { my_vote_option_id: myVote.rows[0]?.option_id ?? null } : {}),
   };
 }

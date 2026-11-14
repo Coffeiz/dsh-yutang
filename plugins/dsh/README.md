@@ -6,7 +6,7 @@
 
 | 项目 | 要求 |
 | --- | --- |
-| DeepSeek Harness | `>=0.2.2-alpha.3` |
+| DeepSeek Harness | `>=0.2.2-rc.1` |
 | Node.js | `>=24 <25` |
 | 安装包 | `dsh-yutang` |
 

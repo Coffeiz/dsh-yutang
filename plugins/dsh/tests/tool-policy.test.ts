@@ -94,7 +94,10 @@ test('turn tool lock persists per Agent turn and honors only the configured exac
     const restored = new YutangRuntime(new StateStore(dataDir, 'http://127.0.0.1:9555'), 'http://127.0.0.1:9555', asCredentialProvider());
     await restored.initialize();
     assert.equal(restored.checkTurnToolLock('session-a', 3, 'yutang_read'), undefined);
+    assert.equal(restored.checkTurnToolLock('session-a', 3, 'yutang_topics'), undefined, 'a second Yutang tool call is allowed in the same turn');
+    assert.equal(restored.checkTurnToolLock('session-a', 3, 'yutang_vote'), undefined, 'a third Yutang tool call is allowed in the same turn');
     assert.match(restored.checkTurnToolLock('session-a', 3, 'shell') ?? '', /工具锁已生效/u);
+    assert.equal(restored.checkTurnToolLock('session-a', 3, 'yutang_send'), undefined, 'the turn lock only blocks non-Yutang tools after Yutang was used');
     assert.equal(restored.checkTurnToolLock('session-b', 3, 'shell'), undefined, 'another Session has an independent lock');
     assert.equal(restored.checkTurnToolLock('session-a', 4, 'shell'), undefined, 'a new turn unlocks the Session');
 
@@ -116,10 +119,14 @@ test('turn tool lock persists per Agent turn and honors only the configured exac
 test('Worker send grants are bound to one session, task, channel, and message budget', () => {
   const runtime = new YutangRuntime(new StateStore('/tmp/dsh-yutang-worker-grant-test', 'http://127.0.0.1:9555'), 'http://127.0.0.1:9555', asCredentialProvider());
   assert.equal(runtime.workerToolAllowed('worker-session', 'web_search'), true);
-  const release = runtime.beginWorkerTask('worker-session', 'mention:event-1', 'channel-1', 'mention', 'server-a');
+  const release = runtime.beginWorkerTask('worker-session', 'mention:event-1', 'channel-1', 'mention', 'server-a', true);
   assert.equal(runtime.workerTaskId('worker-session'), 'mention:event-1');
   assert.equal(runtime.workerToolAllowed('worker-session', 'yutang_read'), true);
   assert.equal(runtime.workerToolAllowed('worker-session', 'yutang_send'), true);
+  assert.equal(runtime.workerToolAllowed('worker-session', 'yutang_vote'), true);
+  assert.equal(runtime.workerPollAllowed('worker-session', 'channel-1', 'server-a'), true);
+  assert.equal(runtime.workerPollAllowed('worker-session', 'channel-2', 'server-a'), false);
+  assert.equal(runtime.workerPollAllowed('worker-session', 'channel-1', 'server-b'), false);
   assert.equal(runtime.workerToolAllowed('worker-session', 'web_search'), false);
   assert.equal(runtime.workerToolAllowed('worker-session', 'yutang_topics'), false);
   assert.equal(runtime.workerSendAllowed('another-session', 'channel-1'), false);
@@ -132,6 +139,13 @@ test('Worker send grants are bound to one session, task, channel, and message bu
   release();
   assert.equal(runtime.workerTaskId('worker-session'), undefined);
   assert.equal(runtime.workerToolAllowed('worker-session', 'web_search'), true);
+  const juryRelease = runtime.beginWorkerJuryTask('juror-session', 'jury:task-1', 'case-1', 'assignment-1', 'server-a');
+  assert.equal(runtime.workerToolAllowed('juror-session', 'yutang_jury'), true);
+  assert.equal(runtime.workerToolAllowed('juror-session', 'yutang_vote'), false, 'jury grants cannot use channel polls');
+  juryRelease();
+  const lurkRelease = runtime.beginWorkerTask('lurk-session', 'browse:lurk', 'channel-1', 'browse', 'server-a');
+  assert.equal(runtime.workerToolAllowed('lurk-session', 'yutang_vote'), false, 'read-only lurk grants cannot vote');
+  lurkRelease();
 });
 
 test('Worker read and send ToolCalls cannot escape their task channel grant', async () => {
@@ -155,6 +169,65 @@ test('Worker read and send ToolCalls cannot escape their task channel grant', as
   } finally {
     await rm(dataDir, { recursive: true, force: true });
   }
+});
+
+test('Worker vote stops when social mode changes during poll lookup', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-yutang-vote-mode-'));
+  const runtime = new YutangRuntime(new StateStore(dataDir, 'http://127.0.0.1:9555'), 'http://127.0.0.1:9555', asCredentialProvider());
+  const tools = new Map<string, { name: string; execute(args: unknown, exec: Record<string, unknown>): Promise<unknown> }>();
+  const ctx = { tools: { register(tool: { name: string; execute(args: unknown, exec: Record<string, unknown>): Promise<unknown> }) { tools.set(tool.name, tool); return () => {}; } } } as unknown as Context;
+  let votes = 0;
+  try {
+    await runtime.updateSettings({ social_mode: 'auto' });
+    const serverId = activeConnection(await runtime.state()).id;
+    const release = runtime.beginWorkerTask('worker', 'task', 'channel-1', 'browse', serverId, true);
+    Object.defineProperty(runtime, 'apiForCurrentAgent', { value: async () => ({
+      getPoll: async () => { await runtime.updateSettings({ social_mode: 'lurk' }); return { data: { channel_id: 'channel-1' } }; },
+      votePoll: async () => { votes++; return {}; },
+    }) });
+    registerYutangTools(ctx, runtime);
+    const result = String(await tools.get('yutang_vote')!.execute({ action: 'vote', poll_id: 'poll-1', option_id: 'option-1' }, { callId: 'vote', signal: AbortSignal.timeout(1000), agent: { id: 'worker' } }));
+    assert.match(result, /SOCIAL_MODE_BLOCKED/u);
+    assert.equal(votes, 0);
+    release();
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
+test('Worker poll get and vote reject another channel returned by the API', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-yutang-poll-scope-'));
+  const runtime = new YutangRuntime(new StateStore(dataDir, 'http://127.0.0.1:9555'), 'http://127.0.0.1:9555', asCredentialProvider());
+  const tools = new Map<string, { name: string; execute(args: unknown, exec: Record<string, unknown>): Promise<unknown> }>();
+  const ctx = { tools: { register(tool: { name: string; execute(args: unknown, exec: Record<string, unknown>): Promise<unknown> }) { tools.set(tool.name, tool); return () => {}; } } } as unknown as Context;
+  let votes = 0;
+  try {
+    await runtime.updateSettings({ social_mode: 'auto' });
+    const release = runtime.beginWorkerTask('worker', 'task', 'channel-1', 'browse', activeConnection(await runtime.state()).id, true);
+    Object.defineProperty(runtime, 'apiForCurrentAgent', { value: async () => ({ getPoll: async () => ({ data: { channel_id: 'channel-2' } }), votePoll: async () => { votes++; } }) });
+    registerYutangTools(ctx, runtime);
+    for (const action of ['get', 'vote']) {
+      const result = String(await tools.get('yutang_vote')!.execute({ action, poll_id: 'poll-1', option_id: 'option-1' }, { callId: action, signal: AbortSignal.timeout(1000), agent: { id: 'worker' } }));
+      assert.match(result, /WORKER_CHANNEL_SCOPE/u);
+    }
+    assert.equal(votes, 0);
+    release();
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
+test('poll list and detail include option IDs and live results', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-yutang-poll-output-'));
+  const runtime = new YutangRuntime(new StateStore(dataDir, 'http://127.0.0.1:9555'), 'http://127.0.0.1:9555', asCredentialProvider());
+  const tools = new Map<string, { name: string; execute(args: unknown, exec: Record<string, unknown>): Promise<unknown> }>();
+  const ctx = { tools: { register(tool: { name: string; execute(args: unknown, exec: Record<string, unknown>): Promise<unknown> }) { tools.set(tool.name, tool); return () => {}; } } } as unknown as Context;
+  const poll = { id: 'poll-1', channel_id: 'channel-1', title: 'Example', status: 'open', created_by: { name: 'Agent' }, ends_at: '2026-12-01T00:00:00Z', duration: '24h', options: [{ id: 'option-1', text: 'Yes' }], results: { total_votes: 1, options: [{ option_id: 'option-1', votes: 1, percentage: 100 }] } };
+  try {
+    Object.defineProperty(runtime, 'apiForCurrentAgent', { value: async () => ({ getPoll: async () => ({ data: poll }), listPolls: async () => ({ data: [poll], page: { has_more: false, next_cursor: null } }) }) });
+    registerYutangTools(ctx, runtime);
+    for (const action of ['list', 'get']) {
+      const result = String(await tools.get('yutang_vote')!.execute({ action, channel_id: 'channel-1', poll_id: 'poll-1' }, { callId: action, signal: AbortSignal.timeout(1000) }));
+      assert.match(result, /option-1/u);
+      assert.match(result, /100%/u);
+    }
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
 
 test('off mode blocks every network tool while status remains local', async () => {
