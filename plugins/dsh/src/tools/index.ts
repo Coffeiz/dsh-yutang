@@ -283,6 +283,7 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
             if ((await runtime.state()).settings.social_mode !== 'auto') throw new Error('SOCIAL_MODE_BLOCKED: 自动任务已因社交模式变更而停止。');
           }
           const { data } = await api.votePoll(pollId, optionId, { signal: exec.signal });
+          if (workerChannelId && exec.agent?.id) runtime.recordWorkerVote(exec.agent.id, pollId, optionId);
           const chosen = data.options.find(option => option.id === optionId);
           return `【投票已记录】${data.title}｜【当前选择】${chosen?.text ?? optionId}｜【截止时间】${data.ends_at}`;
         }

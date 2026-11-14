@@ -11,7 +11,7 @@ export interface PluginLogEntry { id: number; time: number; level: LogLevel; mes
 export interface LoggerLike { debug?: (...args: unknown[]) => void; info?: (...args: unknown[]) => void; warn?: (...args: unknown[]) => void; error?: (...args: unknown[]) => void; list?: (limit?: number) => PluginLogEntry[] }
 
 export type WorkerTaskSource = 'mention' | 'browse' | 'jury';
-type WorkerSendGrant = { kind: 'channel'; taskId: string; channelId: string; source: 'mention' | 'browse'; serverId?: string; allowPollVotes: boolean; remainingSends: number; replyMessageId?: string };
+type WorkerSendGrant = { kind: 'channel'; taskId: string; channelId: string; source: 'mention' | 'browse'; serverId?: string; allowPollVotes: boolean; remainingSends: number; replyMessageId?: string; votes?: Array<{ pollId: string; optionId: string }> };
 type WorkerJuryGrant = { kind: 'jury'; taskId: string; caseId: string; assignmentId: string; serverId: string };
 
 export class YutangRuntime {
@@ -102,6 +102,8 @@ export class YutangRuntime {
     if (grant?.kind === 'channel') grant.replyMessageId = messageId;
   }
   workerReplyMessageId(agentId: string) { const grant = this.workerGrants.get(agentId); return grant?.kind === 'channel' ? grant.replyMessageId : undefined; }
+  recordWorkerVote(agentId: string, pollId: string, optionId: string) { const grant = this.workerGrants.get(agentId); if (grant?.kind === 'channel') (grant.votes ??= []).push({ pollId, optionId }); }
+  workerVotes(agentId: string) { const grant = this.workerGrants.get(agentId); return grant?.kind === 'channel' ? [...(grant.votes ?? [])] : []; }
   selectSendChannel(agentId: string, channelId: string, serverId: string) { this.joinedSendChannels.set(agentId, { channelId, serverId }); }
   clearSendChannel(agentId: string, channelId: string, serverId: string) {
     const selected = this.joinedSendChannels.get(agentId);

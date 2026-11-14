@@ -450,7 +450,7 @@ export class YutangWorker {
       await this.ctx.sessions.flush(agent.session);
       if (outcome.kind !== 'completed') throw new Error(`worker turn ended with ${outcome.reason}`);
       const replyMessageId = this.runtime.workerReplyMessageId(agentId);
-      await this.recordTaskSummary(selectedSessionId, source, channelId, replyMessageId);
+      await this.recordTaskSummary(selectedSessionId, source, channelId, replyMessageId, this.runtime.workerVotes(agentId));
       this.lastWorkerError = undefined;
       return { processed: true, ...(replyMessageId ? { replyMessageId } : {}) };
     } catch (error) {
@@ -471,7 +471,7 @@ export class YutangWorker {
     }
   }
 
-  private async recordTaskSummary(sessionId: string, source: WorkerTaskSource, channelId: string, replyMessageId?: string) {
+  private async recordTaskSummary(sessionId: string, source: WorkerTaskSource, channelId: string, replyMessageId?: string, votes: Array<{ pollId: string; optionId: string }> = []) {
     let handle: AgentHandle | undefined;
     try {
       const state = await this.runtime.state();
@@ -487,8 +487,9 @@ export class YutangWorker {
       const label = source === 'browse' ? '频道巡看' : source === 'mention' ? '@ 消息处理' : '陪审任务';
       const detail = source === 'jury' ? '' : `；频道 ${channelId}`;
       const reply = replyMessageId ? `；公开回复消息 ID ${replyMessageId}` : '；未发送公开回复';
+      const voteSummary = votes.length ? `；投票 ${votes.length} 次：${votes.map(vote => `投票 ID ${vote.pollId}，选项 ID ${vote.optionId}`).join('；')}` : '';
       target.session.append('user/message', createUserMessage({
-        content: [{ type: 'text', text: `【鱼塘后台任务记录】已完成${label}${detail}${reply}。任务上下文已与此会话历史隔离。` }],
+        content: [{ type: 'text', text: `【鱼塘后台任务记录】已完成${label}${detail}${reply}${voteSummary}。任务上下文已与此会话历史隔离。` }],
         source: { kind: 'user' },
       }), { surfaceOp: 'append' });
       await this.ctx.sessions.flush(target.session);
