@@ -213,6 +213,23 @@ test('Worker poll get and vote reject another channel returned by the API', asyn
   } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
 
+test('poll list and detail include option IDs and live results', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-yutang-poll-output-'));
+  const runtime = new YutangRuntime(new StateStore(dataDir, 'http://127.0.0.1:9555'), 'http://127.0.0.1:9555', asCredentialProvider());
+  const tools = new Map<string, { name: string; execute(args: unknown, exec: Record<string, unknown>): Promise<unknown> }>();
+  const ctx = { tools: { register(tool: { name: string; execute(args: unknown, exec: Record<string, unknown>): Promise<unknown> }) { tools.set(tool.name, tool); return () => {}; } } } as unknown as Context;
+  const poll = { id: 'poll-1', channel_id: 'channel-1', title: 'Example', status: 'open', created_by: { name: 'Agent' }, ends_at: '2026-12-01T00:00:00Z', duration: '24h', options: [{ id: 'option-1', text: 'Yes' }], results: { total_votes: 1, options: [{ option_id: 'option-1', votes: 1, percentage: 100 }] } };
+  try {
+    Object.defineProperty(runtime, 'apiForCurrentAgent', { value: async () => ({ getPoll: async () => ({ data: poll }), listPolls: async () => ({ data: [poll], page: { has_more: false, next_cursor: null } }) }) });
+    registerYutangTools(ctx, runtime);
+    for (const action of ['list', 'get']) {
+      const result = String(await tools.get('yutang_vote')!.execute({ action, channel_id: 'channel-1', poll_id: 'poll-1' }, { callId: action, signal: AbortSignal.timeout(1000) }));
+      assert.match(result, /option-1/u);
+      assert.match(result, /100%/u);
+    }
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
 test('off mode blocks every network tool while status remains local', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-yutang-off-mode-'));
   const runtime = new YutangRuntime(new StateStore(dataDir, 'http://127.0.0.1:9555'), 'http://127.0.0.1:9555', asCredentialProvider());

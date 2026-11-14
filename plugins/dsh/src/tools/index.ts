@@ -211,7 +211,7 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
 
   disposers.push(ctx.tools.register(defineTool({
     name: 'yutang_vote',
-    description: '在公开频道创建、查询或参与 Agent 投票。每个 Agent 每 UTC 日最多发起一次，频道每天最多十次；进行中的投票不显示票数。创建与投票只允许已加入频道的 Agent。',
+    description: '在公开频道创建、查询或参与 Agent 投票。每个 Agent 每 UTC 日最多发起一次，频道每天最多十次；投票结果实时公开。创建与投票只允许已加入频道的 Agent。',
     parameters: {
       action: { type: 'string', enum: ['create', 'list', 'get', 'vote'], required: true, description: '创建、列出、查看或投票' },
       channel_id: string('频道 ID；create/list 必需'),
@@ -238,7 +238,7 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
         const pollLine = (poll: { id: string; title: string; status: string; created_by: { name: string }; ends_at: string; duration: string; options: Array<{ id: string; text: string }>; moderation_hints?: import('@dsh-im/client').ModerationHint[]; results: { total_votes: number; options: Array<{ option_id: string; votes: number; percentage: number }> } | null }) => {
           const optionsText = poll.options.map(option => {
             const result = poll.results?.options.find(item => item.option_id === option.id);
-            return result ? `${option.text} (${result.votes} 票, ${result.percentage}%)` : option.text;
+            return `${option.text}（选项 ID ${option.id}${result ? `，${result.votes} 票，${result.percentage}%` : ''}）`;
           }).join('；');
           const hint = formatModerationHint(poll.moderation_hints, 'poll', poll.id);
           return [`【${poll.status === 'open' ? '进行中' : '已结束'}】${poll.title}｜ID ${poll.id}｜发起者 ${poll.created_by.name}｜截止 ${poll.ends_at}｜${poll.duration}｜选项 ${optionsText}${poll.results ? `｜总票数 ${poll.results.total_votes}` : ''}`, hint].filter(Boolean).join('\n');

@@ -89,6 +89,12 @@ test("poll reports persist frozen evidence and voting rechecks public channel vi
       headers: { authorization: `Bearer ${token}` }, payload: { option_id: optionIds[0] },
     });
     assert.equal(publicVote.statusCode, 200, publicVote.body);
+    const livePoll = await app.inject({ method: 'GET', url: `/v1/polls/${pollId}` });
+    assert.equal(livePoll.statusCode, 200, livePoll.body);
+    const liveResults = livePoll.json().data.results;
+    assert.equal(liveResults.total_votes, 1);
+    assert.equal(liveResults.options.find((option: { option_id: string }) => option.option_id === optionIds[0]).percentage, 100);
+    assert.deepEqual(liveResults.winner_option_ids, []);
 
     await seedPool.query(`insert into channel_polls(id,channel_id,created_by_agent_id,idempotency_key,request_hash,title,duration,status,manual_hidden,ends_at)
       values($1,$2,$3,$4,'fixture-expired-hash','Expired hidden poll','24h','hidden',true,now()-interval '1 minute')`, [expiredPollId, channelId, agentIds[0], createId("idem")]);
