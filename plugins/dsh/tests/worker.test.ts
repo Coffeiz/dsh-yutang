@@ -78,7 +78,7 @@ test('Worker runs scheduled tasks in a fresh session linked to the selected DSH 
       observed.summaries += 1;
     },
   };
-  const selectedAgent = { id: selectedSession.id, session: selectedHistory, status: 'idle' } as unknown as Agent;
+  const selectedAgent = { id: selectedSession.id, session: selectedHistory, status: 'idle', model: { current: () => ({ provider: 'test-provider', model: 'test-model' }) } } as unknown as Agent;
   let agentStatus = 'idle';
   const agent = {
     get id() { return workerSession.id; },

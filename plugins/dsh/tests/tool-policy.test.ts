@@ -168,6 +168,45 @@ test('Worker read and send ToolCalls cannot escape their task channel grant', as
   }
 });
 
+test('Worker poll tools use the Server bound to their owning Session, not the active Server', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'dsh-yutang-poll-session-server-'));
+  const runtime = new YutangRuntime(new StateStore(dataDir, 'http://127.0.0.1:9555'), 'http://127.0.0.1:9555', asCredentialProvider());
+  const tools = new Map<string, { name: string; execute(args: unknown, exec: Record<string, unknown>): Promise<unknown> }>();
+  const ctx = { tools: { register(tool: { name: string; execute(args: unknown, exec: Record<string, unknown>): Promise<unknown> }) { tools.set(tool.name, tool); return () => {}; } } } as unknown as Context;
+  const poll = { id: 'poll-1', channel_id: 'channel-granted', title: 'Example', status: 'open', created_by: { name: 'Agent' }, ends_at: '2026-12-01T00:00:00Z', duration: '24h', options: [{ id: 'option-1', text: 'Yes' }], results: null };
+  try {
+    const boundServer = activeConnection(await runtime.state());
+    const otherServer = await runtime.store.addCustomServer('Other', 'https://other.example:8443');
+    await runtime.store.bindSession('owner-session', boundServer.id);
+    await runtime.selectServer(otherServer.id);
+    await runtime.updateSettings({ social_mode: 'auto' });
+
+    const seenServerIds: Array<string | undefined> = [];
+    Object.defineProperty(runtime, 'apiForSession', { configurable: true, value: async (_sessionId: string, expectedServerId?: string) => {
+      seenServerIds.push(expectedServerId);
+      return {
+        listPolls: async () => ({ data: [poll], page: { has_more: false, next_cursor: null } }),
+        getPoll: async () => ({ data: poll }),
+        votePoll: async () => ({ data: poll }),
+      };
+    } });
+
+    const release = runtime.beginWorkerTask('worker-session', 'task-1', 'channel-granted', 'browse', boundServer.id, 'owner-session', true);
+    registerYutangTools(ctx, runtime);
+    const exec = { callId: 'worker-poll-session-server', signal: AbortSignal.timeout(1_000), agent: { id: 'worker-session' } };
+    for (const [action, args] of [
+      ['list', { action: 'list', channel_id: 'channel-granted' }],
+      ['get', { action: 'get', poll_id: 'poll-1' }],
+      ['vote', { action: 'vote', poll_id: 'poll-1', option_id: 'option-1' }],
+    ] as const) {
+      const result = String(await tools.get('yutang_vote')!.execute(args, { ...exec, callId: action }));
+      assert.doesNotMatch(result, /WORKER_CHANNEL_SCOPE/u, `${action} must stay within the bound Session's grant`);
+    }
+    assert.deepEqual(seenServerIds, [boundServer.id, boundServer.id, boundServer.id], 'API calls must be pinned to the grant owner Session rather than the profile-wide active Server');
+    release();
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
 test('off mode blocks every network tool while status remains local', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'dsh-yutang-off-mode-'));
   const runtime = new YutangRuntime(new StateStore(dataDir, 'http://127.0.0.1:9555'), 'http://127.0.0.1:9555', asCredentialProvider());

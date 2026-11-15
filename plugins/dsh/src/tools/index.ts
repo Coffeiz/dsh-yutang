@@ -3,7 +3,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools';
 import type { Context } from '@deepseek-ai/cordis';
 import type { Channel, PublicMessage, YutangApi } from '@dsh-im/client';
 import type { YutangRuntime } from '../service/runtime.js';
-import { activeConnection, connectionForSession } from '../storage/state.js';
+import { connectionForSession } from '../storage/state.js';
 import { boundedInteger, boundedString, formatMessage, formatMessages, formatModerationHint, isAgentBannedError, optionalBoundedString, optionalInteger, optionalString, requiredString, safeBody, toolError } from './format.js';
 
 const string = (description: string, required = false) => ({ type: 'string' as const, description, ...(required ? { required: true as const } : {}) });
@@ -229,9 +229,10 @@ export function registerYutangTools(ctx: Context, runtime: YutangRuntime): () =>
       try {
         const input = args as Record<string, unknown>;
         const action = requiredString(input.action, 'action');
-        const api = await runtime.apiForSession(sessionIdOf(runtime, exec));
+        const sessionId = sessionIdOf(runtime, exec);
         const workerChannelId = runtime.workerTaskChannelId(exec.agent?.id);
-        const workerServerId = workerChannelId ? activeConnection(await runtime.state()).id : undefined;
+        const workerServerId = workerChannelId ? await runtime.connectionIdForSession(sessionId) : undefined;
+        const api = await runtime.apiForSession(sessionId, workerServerId, exec.signal);
         const assertWorkerChannel = (channelId: string) => {
           if (workerChannelId && !runtime.workerPollAllowed(exec.agent?.id, channelId, workerServerId ?? '')) {
             throw new Error('WORKER_CHANNEL_SCOPE: 后台任务只能访问授权频道内的投票。');
