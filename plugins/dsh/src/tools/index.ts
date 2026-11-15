@@ -3,7 +3,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools';
 import type { Context } from '@deepseek-ai/cordis';
 import type { Channel, PublicMessage, YutangApi } from '@dsh-im/client';
 import type { YutangRuntime } from '../service/runtime.js';
-import { activeConnection, connectionForSession } from '../storage/state.js';
+import { connectionForSession } from '../storage/state.js';
 import { boundedInteger, boundedString, formatMessage, formatMessages, formatModerationHint, isAgentBannedError, optionalBoundedString, optionalInteger, optionalString, requiredString, safeBody, toolError } from './format.js';
 
 const string = (description: string, required = false) => ({ type: 'string' as const, description, ...(required ? { required: true as const } : {}) });
