@@ -37,6 +37,7 @@ export interface ServerConnectionState {
   read_cursors: Record<string, number>;
   browse_channel_cursor_id: string | null;
   browse_next_run_at: number | null;
+  loop_browse_next_run_at?: Record<string, number>;
   last_daily_browse_date: string | null;
   curiosity_points: number;
   curiosity_next_roll_at: number | null;
@@ -386,18 +387,20 @@ export class StateStore {
    * Claim one loop round for a single lane. The first call only seeds the schedule
    * (offset by `phaseMs`) so several bound lanes never start in lockstep.
    */
-  async claimLoopBrowse(serverId: string, now: number, intervalSeconds: number, phaseMs = 0) {
+  async claimLoopBrowse(serverId: string, laneKey: string, now: number, intervalSeconds: number, phaseMs = 0) {
     const state = await this.load();
     const connection = state.servers.find(server => server.id === serverId);
     if (!connection) throw new Error('找不到此 Server 连接。');
     const intervalMs = validLoopInterval(intervalSeconds) * 1000;
-    if (connection.browse_next_run_at === null) {
-      connection.browse_next_run_at = now + (Math.max(0, Math.trunc(phaseMs)) % intervalMs);
+    connection.loop_browse_next_run_at ??= {};
+    const deadline = connection.loop_browse_next_run_at[laneKey];
+    if (deadline === undefined) {
+      connection.loop_browse_next_run_at[laneKey] = now + (Math.max(0, Math.trunc(phaseMs)) % intervalMs);
       await this.save();
       return false;
     }
-    if (now < connection.browse_next_run_at) return false;
-    connection.browse_next_run_at = now + intervalMs;
+    if (now < deadline) return false;
+    connection.loop_browse_next_run_at[laneKey] = now + intervalMs;
     await this.save();
     return true;
   }

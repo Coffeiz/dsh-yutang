@@ -48,11 +48,11 @@ test('loop browse seeds a phase offset before the first round fires', async () =
   const { dataDir, store } = await setup();
   try {
     const now = 1_700_000_000_000;
-    assert.equal(await store.claimLoopBrowse('lane-a', now, 30, 12_000), false, 'first call only schedules');
+    assert.equal(await store.claimLoopBrowse('lane-a', 'session-a', now, 30, 12_000), false, 'first call only schedules');
     const seeded = (await store.load()).servers.find(server => server.id === 'lane-a')!;
-    assert.equal(seeded.browse_next_run_at, now + 12_000);
-    assert.equal(await store.claimLoopBrowse('lane-a', now + 11_000, 30, 12_000), false, 'still before the phase offset');
-    assert.equal(await store.claimLoopBrowse('lane-a', now + 12_000, 30, 12_000), true, 'fires once the offset is reached');
+    assert.equal(seeded.loop_browse_next_run_at?.['session-a'], now + 12_000);
+    assert.equal(await store.claimLoopBrowse('lane-a', 'session-a', now + 11_000, 30, 12_000), false, 'still before the phase offset');
+    assert.equal(await store.claimLoopBrowse('lane-a', 'session-a', now + 12_000, 30, 12_000), true, 'fires once the offset is reached');
   } finally {
     await rm(dataDir, { recursive: true, force: true });
   }
@@ -62,10 +62,10 @@ test('an interval later is refused until the next interval elapses', async () =>
   const { dataDir, store } = await setup();
   try {
     const now = 1_700_000_000_000;
-    await store.claimLoopBrowse('lane-a', now, 25, 0);
-    assert.equal(await store.claimLoopBrowse('lane-a', now + 1, 25, 0), true);
-    assert.equal(await store.claimLoopBrowse('lane-a', now + 20_000, 25, 0), false, 'inside the same interval');
-    assert.equal(await store.claimLoopBrowse('lane-a', now + 26_000, 25, 0), true, 'next interval is due');
+    await store.claimLoopBrowse('lane-a', 'session-a', now, 25, 0);
+    assert.equal(await store.claimLoopBrowse('lane-a', 'session-a', now + 1, 25, 0), true);
+    assert.equal(await store.claimLoopBrowse('lane-a', 'session-a', now + 20_000, 25, 0), false, 'inside the same interval');
+    assert.equal(await store.claimLoopBrowse('lane-a', 'session-a', now + 26_000, 25, 0), true, 'next interval is due');
   } finally {
     await rm(dataDir, { recursive: true, force: true });
   }
@@ -75,12 +75,13 @@ test('lanes keep separate loop schedules and out-of-range intervals fall back to
   const { dataDir, store } = await setup();
   try {
     const now = 1_700_000_000_000;
-    await store.claimLoopBrowse('lane-a', now, 5, 0);
-    assert.equal(await store.claimLoopBrowse('lane-a', now + 1, 5, 0), true, 'an interval below the floor becomes the default');
-    await store.claimLoopBrowse('lane-b', now, 5, 0);
-    assert.equal(await store.claimLoopBrowse('lane-b', now + 1, 5, 0), true, 'the other lane has its own schedule');
+    await store.claimLoopBrowse('lane-a', 'session-a', now, 5, 0);
+    assert.equal(await store.claimLoopBrowse('lane-a', 'session-a', now + 1, 5, 0), true, 'an interval below the floor becomes the default');
+    await store.claimLoopBrowse('lane-a', 'session-b', now, 60, 0);
+    assert.equal(await store.claimLoopBrowse('lane-a', 'session-b', now + 1, 60, 0), true, 'another lane on the same connection has an independent schedule');
     const laneA = (await store.load()).servers.find(server => server.id === 'lane-a')!;
-    assert.equal(laneA.browse_next_run_at, now + 1 + LOOP_BROWSE_DEFAULT_SECONDS * 1000);
+    assert.equal(laneA.loop_browse_next_run_at?.['session-a'], now + 1 + LOOP_BROWSE_DEFAULT_SECONDS * 1000);
+    assert.equal(laneA.loop_browse_next_run_at?.['session-b'], now + 1 + 60_000);
   } finally {
     await rm(dataDir, { recursive: true, force: true });
   }

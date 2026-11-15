@@ -348,7 +348,7 @@ export class YutangWorker {
         if (roll.rolled && roll.triggered) await this.pollChannels(serverId);
       } else if (binding.browse_schedule_mode === 'loop') {
         const intervalMs = binding.loop_interval_seconds * 1000;
-        const due = await this.runtime.store.claimLoopBrowse(serverId, now, binding.loop_interval_seconds, lanePhase(this.lane.sessionId, intervalMs));
+        const due = await this.runtime.store.claimLoopBrowse(serverId, this.lane.sessionId, now, binding.loop_interval_seconds, lanePhase(this.lane.sessionId, intervalMs));
         if (due) await this.pollChannels(serverId);
       }
     } finally {
