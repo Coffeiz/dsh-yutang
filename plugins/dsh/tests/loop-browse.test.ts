@@ -105,6 +105,7 @@ test('loop lane deadlines survive StateStore restart', async () => {
   try {
     const now = 1_700_000_000_000;
     await store.claimLoopBrowse('lane-a', 'session-a', now, 60, 0);
+    assert.equal(await store.claimLoopBrowse('lane-a', 'session-a', now, 60, 0), true, 'consume the seeded deadline and advance by one interval');
     const restarted = new StateStore(dataDir, 'http://127.0.0.1:9555');
     assert.equal(await restarted.claimLoopBrowse('lane-a', 'session-a', now + 30_000, 60, 0), false);
     assert.equal(await restarted.claimLoopBrowse('lane-a', 'session-a', now + 60_000, 60, 0), true);

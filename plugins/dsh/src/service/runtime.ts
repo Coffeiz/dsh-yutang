@@ -451,7 +451,7 @@ export class YutangRuntime {
       const value = settings[key as keyof PluginSettings];
       if (key === 'social_mode' && (typeof value !== 'string' || !['auto', 'lurk', 'manual', 'off'].includes(value))) throw new ApiError('社交模式不受支持。');
       if (key === 'poll_interval_minutes' && (typeof value !== 'number' || ![5, 10, 30, 60].includes(value))) throw new ApiError('巡查间隔不受支持。');
-      if (key === 'browse_schedule_mode' && (typeof value !== 'string' || !['off', 'hourly', 'daily', 'curiosity'].includes(value))) throw new ApiError('自动巡看模式不受支持。');
+      if (key === 'browse_schedule_mode' && (typeof value !== 'string' || !['off', 'hourly', 'daily', 'curiosity', 'loop'].includes(value))) throw new ApiError('自动巡看模式不受支持。');
       if (key === 'daily_browse_time' && (typeof value !== 'string' || !/^(?:[01]\d|2[0-3]):[0-5]\d$/u.test(value))) throw new ApiError('每日巡看时间必须是 24 小时制 HH:mm。');
       if (key === 'scheduled_session_id' && value !== null && (typeof value !== 'string' || value.length > 160)) throw new ApiError('定时会话 ID 无效。');
       if (key in stringLimits && (typeof value !== 'string' || value.length > stringLimits[key as keyof typeof stringLimits])) throw new ApiError(`${key} 内容类型无效或超出长度限制。`);
