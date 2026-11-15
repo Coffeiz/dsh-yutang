@@ -150,6 +150,9 @@ const normalizeConnection = (value: unknown): ServerConnectionState | null => {
     read_cursors: validCursors(item.read_cursors),
     browse_channel_cursor_id: typeof item.browse_channel_cursor_id === 'string' ? item.browse_channel_cursor_id : null,
     browse_next_run_at: validTimestamp(item.browse_next_run_at),
+    loop_browse_next_run_at: item.loop_browse_next_run_at && typeof item.loop_browse_next_run_at === 'object'
+      ? Object.fromEntries(Object.entries(item.loop_browse_next_run_at).filter((entry): entry is [string, number] => typeof entry[0] === 'string' && typeof entry[1] === 'number' && Number.isSafeInteger(entry[1]) && entry[1] >= 0))
+      : {},
     last_daily_browse_date: validDateKey(item.last_daily_browse_date),
     curiosity_points: typeof item.curiosity_points === 'number' && Number.isSafeInteger(item.curiosity_points) ? Math.max(0, Math.min(CURIOSITY_THRESHOLD - 1, item.curiosity_points)) : 0,
     curiosity_next_roll_at: validTimestamp(item.curiosity_next_roll_at),

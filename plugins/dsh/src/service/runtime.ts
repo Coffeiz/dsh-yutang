@@ -21,6 +21,7 @@ export class YutangRuntime {
   private beforeServerSwitch: ((nextServerId: string) => void | Promise<void>) | undefined;
   private workerStatusReader: (() => { worker: string; realtime: string; last_error?: string; lanes?: number }) | undefined;
   private readonly workerGrants = new Map<string, WorkerSendGrant | WorkerJuryGrant>();
+  private readonly browseClaims = new Set<string>();
   private readonly joinedSendChannels = new Map<string, { channelId: string; serverId: string }>();
   private readonly turnToolLock = new YutangTurnToolLock();
   private turnLockAllowedTools: string[] = [];
@@ -89,6 +90,12 @@ export class YutangRuntime {
     if (source === 'jury') throw new Error('jury tasks require a case-bound grant');
     this.workerGrants.set(agentId, { kind: 'channel', taskId, channelId, source, ...(serverId ? { serverId } : {}), ...(ownerSessionId ? { ownerSessionId } : {}), allowPollVotes, remainingSends: 1 });
     return () => { this.workerGrants.delete(agentId); };
+  }
+  claimBrowseChannel(serverId: string, channelId: string) {
+    const key = `${serverId}\u0000${channelId}`;
+    if (this.browseClaims.has(key)) return undefined;
+    this.browseClaims.add(key);
+    return () => { this.browseClaims.delete(key); };
   }
   beginWorkerJuryTask(agentId: string, taskId: string, caseId: string, assignmentId: string, serverId: string, ownerSessionId?: string) {
     this.workerGrants.set(agentId, { kind: 'jury', taskId, caseId, assignmentId, serverId, ...(ownerSessionId ? { ownerSessionId } : {}) });

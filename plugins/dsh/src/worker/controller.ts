@@ -564,6 +564,9 @@ export class YutangWorker {
       const scanBatch = rotatedChannels.slice(0, MAX_BROWSE_CHANNELS_PER_CYCLE);
       for (const channel of scanBatch) {
         if (this.taskRunning || this.stopped) break;
+        const releaseBrowseClaim = this.runtime.claimBrowseChannel(serverId, channel.id);
+        if (!releaseBrowseClaim) continue;
+        try {
         const { state, binding, connection } = await this.bindingState();
         if (!binding || !connection || connection.id !== serverId || !['auto', 'lurk'].includes(state.settings.social_mode) || binding.browse_schedule_mode === 'off') break;
         const cursor = connection.read_cursors[channel.id] ?? 0;
@@ -597,6 +600,7 @@ export class YutangWorker {
             break;
           }
         } catch (error) { this.noteError(error); break; }
+        } finally { releaseBrowseClaim(); }
       }
     } finally {
       this.pollInProgress = false;
