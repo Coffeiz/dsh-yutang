@@ -70,6 +70,7 @@ test('session picker matches DSH titles and omits archived sessions', async () =
       { sessionId: unavailableId, updatedAt: 1_799_996_000_000, blank: false, origin: 'subagent' as const },
     ];
     const ctx = {
+      get: (name: string) => name === 'sessionController' ? { list: async () => ({ items: records }) } : undefined,
       sessionPersistence: { stat: async () => undefined },
       sessionController: { list: async () => ({ items: records }) },
       agents: { list: () => [liveAgent] },

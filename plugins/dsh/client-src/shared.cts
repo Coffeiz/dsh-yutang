@@ -17,7 +17,7 @@ export type Settings = {
   mention_wakeup_enabled: boolean
   jury_worker_enabled: boolean
   tool_lock_allowed_tools: ('web_search' | 'web_fetch')[]
-  browse_schedule_mode: 'off' | 'hourly' | 'daily' | 'curiosity'
+  browse_schedule_mode: 'off' | 'hourly' | 'daily' | 'curiosity' | 'loop'
   daily_browse_time: string
   scheduled_session_id: string | null
 }

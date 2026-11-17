@@ -2,7 +2,7 @@ import { createHash, generateKeyPairSync, createPrivateKey, sign } from 'node:cr
 import { resolve } from 'node:path';
 import { credentialKey, type CredentialKey, type CredentialProvider } from '@deepseek-ai/dsh-credentials';
 import { ApiError, YutangApi } from '@dsh-im/client';
-import { activeConnection, type IdentityState, type PendingRegistrationState, type PluginSettings, type ServerConnectionState, type StateStore, type YutangState } from '../storage/state.js';
+import { activeConnection, bindingOf, connectionForSession, type IdentityState, type PendingRegistrationState, type PluginSettings, type ServerConnectionState, type StateStore, type YutangState } from '../storage/state.js';
 import { normalizeServerUrl } from '../config.js';
 import { normalizeTurnLockAllowlist, YutangTurnToolLock } from '../security/tool-lock.js';
 
@@ -11,21 +11,22 @@ export interface PluginLogEntry { id: number; time: number; level: LogLevel; mes
 export interface LoggerLike { debug?: (...args: unknown[]) => void; info?: (...args: unknown[]) => void; warn?: (...args: unknown[]) => void; error?: (...args: unknown[]) => void; list?: (limit?: number) => PluginLogEntry[] }
 
 export type WorkerTaskSource = 'mention' | 'browse' | 'jury';
-type WorkerSendGrant = { kind: 'channel'; taskId: string; channelId: string; source: 'mention' | 'browse'; serverId?: string; allowPollVotes: boolean; remainingSends: number; replyMessageId?: string; votes?: Array<{ pollId: string; optionId: string }> };
-type WorkerJuryGrant = { kind: 'jury'; taskId: string; caseId: string; assignmentId: string; serverId: string };
+type WorkerSendGrant = { kind: 'channel'; taskId: string; channelId: string; source: 'mention' | 'browse'; serverId?: string; ownerSessionId?: string; allowPollVotes: boolean; remainingSends: number; replyMessageId?: string; votes?: Array<{ pollId: string; optionId: string }> };
+type WorkerJuryGrant = { kind: 'jury'; taskId: string; caseId: string; assignmentId: string; serverId: string; ownerSessionId?: string };
 
 export class YutangRuntime {
   private socialPrompt = '';
   private promptChanged: (() => void) | undefined;
-  private settingsChanged: (() => void | Promise<void>) | undefined;
+  private readonly settingsListeners = new Set<() => void | Promise<void>>();
   private beforeServerSwitch: ((nextServerId: string) => void | Promise<void>) | undefined;
-  private workerStatusReader: (() => { worker: string; realtime: string; last_error?: string }) | undefined;
+  private workerStatusReader: (() => { worker: string; realtime: string; last_error?: string; lanes?: number }) | undefined;
   private readonly workerGrants = new Map<string, WorkerSendGrant | WorkerJuryGrant>();
+  private readonly browseClaims = new Set<string>();
   private readonly joinedSendChannels = new Map<string, { channelId: string; serverId: string }>();
   private readonly turnToolLock = new YutangTurnToolLock();
   private turnLockAllowedTools: string[] = [];
   private serverSwitchQueue: Promise<void> = Promise.resolve();
-  private accessToken: { serverId: string; agentId: string; value: string; expiresAt: number } | undefined;
+  private readonly accessTokens = new Map<string, { agentId: string; value: string; expiresAt: number }>();
   private readonly accessTokenRefreshes = new Map<string, Promise<string>>();
   private readonly credentialProfileId: string;
   constructor(readonly store: StateStore, readonly defaultServerUrl: string, private readonly credentials: CredentialProvider, private readonly logger: LoggerLike = console, dataDir = 'default') {
@@ -48,17 +49,28 @@ export class YutangRuntime {
       await this.storePrivateKey(connection.id, legacyPrivateKey);
       await this.store.update({ identity: connection.identity });
     }
+    await this.syncScheduledSessionBinding();
   }
   setPromptChangedHandler(handler: () => void) { this.promptChanged = handler; }
-  setSettingsChangedHandler(handler: () => void | Promise<void>) { this.settingsChanged = handler; }
+  /** Subscribe to settings changes; every worker lane needs its own reaction. */
+  onSettingsChanged(handler: () => void | Promise<void>) {
+    this.settingsListeners.add(handler);
+    return () => { this.settingsListeners.delete(handler); };
+  }
+  setSettingsChangedHandler(handler: () => void | Promise<void>) {
+    this.settingsListeners.clear();
+    if (handler) this.settingsListeners.add(handler);
+  }
   setBeforeServerSwitchHandler(handler: (nextServerId: string) => void | Promise<void>) { this.beforeServerSwitch = handler; }
   private async notifySettingsChanged() {
-    try { await this.settingsChanged?.(); }
-    catch (error) { this.logger.warn?.('dsh-yutang settings reconciliation failed', error); }
+    for (const listener of [...this.settingsListeners]) {
+      try { await listener(); }
+      catch (error) { this.logger.warn?.('dsh-yutang settings reconciliation failed', error); }
+    }
   }
   async refreshWorkerSettings() { await this.notifySettingsChanged(); }
-  setWorkerStatusReader(reader: () => { worker: string; realtime: string; last_error?: string }) { this.workerStatusReader = reader; }
-  workerStatus() { return this.workerStatusReader?.() ?? { worker: 'stopped', realtime: 'disconnected' }; }
+  setWorkerStatusReader(reader: () => { worker: string; realtime: string; last_error?: string; lanes?: number }) { this.workerStatusReader = reader; }
+  workerStatus() { return this.workerStatusReader?.() ?? { worker: 'stopped', realtime: 'disconnected', lanes: 0 }; }
   checkTurnToolLock(agentId: string | undefined, turn: number | undefined, toolName: string) {
     return this.turnToolLock.check(agentId, turn, toolName, this.turnLockAllowedTools);
   }
@@ -74,14 +86,30 @@ export class YutangRuntime {
       this.logger.warn?.('dsh-yutang could not remember the last used session', error);
     }
   }
-  beginWorkerTask(agentId: string, taskId: string, channelId: string, source: WorkerTaskSource, serverId?: string, allowPollVotes = false) {
+  beginWorkerTask(agentId: string, taskId: string, channelId: string, source: WorkerTaskSource, serverId?: string, allowPollVotes = false, ownerSessionId?: string) {
     if (source === 'jury') throw new Error('jury tasks require a case-bound grant');
-    this.workerGrants.set(agentId, { kind: 'channel', taskId, channelId, source, ...(serverId ? { serverId } : {}), allowPollVotes, remainingSends: 1 });
+    this.workerGrants.set(agentId, { kind: 'channel', taskId, channelId, source, ...(serverId ? { serverId } : {}), ...(ownerSessionId ? { ownerSessionId } : {}), allowPollVotes, remainingSends: 1 });
     return () => { this.workerGrants.delete(agentId); };
   }
-  beginWorkerJuryTask(agentId: string, taskId: string, caseId: string, assignmentId: string, serverId: string) {
-    this.workerGrants.set(agentId, { kind: 'jury', taskId, caseId, assignmentId, serverId });
+  claimBrowseChannel(serverId: string, channelId: string) {
+    const key = `${serverId}\u0000${channelId}`;
+    if (this.browseClaims.has(key)) return undefined;
+    this.browseClaims.add(key);
+    return () => { this.browseClaims.delete(key); };
+  }
+  beginWorkerJuryTask(agentId: string, taskId: string, caseId: string, assignmentId: string, serverId: string, ownerSessionId?: string) {
+    this.workerGrants.set(agentId, { kind: 'jury', taskId, caseId, assignmentId, serverId, ...(ownerSessionId ? { ownerSessionId } : {}) });
     return () => { this.workerGrants.delete(agentId); };
+  }
+  /**
+   * Resolve the DSH Session that owns a tool-calling agent.
+   * Background workers run in throwaway sub-sessions (`yutang-worker-*`) whose identity
+   * must be inherited from the bound Session that spawned them, otherwise the call
+   * would silently fall back to the profile-wide `active_server_id`.
+   */
+  sessionIdFor(sessionId: string | undefined) {
+    if (!sessionId) return undefined;
+    return this.workerGrants.get(sessionId)?.ownerSessionId ?? sessionId;
   }
   workerSendAllowed(agentId: string | undefined, channelId: string, serverId?: string) {
     if (!agentId) return false;
@@ -170,12 +198,18 @@ export class YutangRuntime {
     return new YutangApi(server.server_url, accessToken ?? undefined);
   }
 
+  /** Cached Bearer token of one identity; several Sessions may hold different identities at once. */
+  private cachedToken(serverId: string, agentId: string): string | undefined {
+    const token = this.accessTokens.get(serverId);
+    return token && token.agentId === agentId && token.expiresAt > Date.now() + 30_000 ? token.value : undefined;
+  }
+
   private async recoverUnauthorizedToken(serverId: string, agentId: string, rejectedToken: string, signal?: AbortSignal) {
-    const isFreshReplacement = (token: typeof this.accessToken) => token?.serverId === serverId
-      && token.agentId === agentId
-      && token.value !== rejectedToken
-      && token.expiresAt > Date.now() + 30_000;
-    if (isFreshReplacement(this.accessToken)) return this.accessToken!.value;
+    const isFreshReplacement = () => {
+      const token = this.accessTokens.get(serverId);
+      return Boolean(token && token.agentId === agentId && token.value !== rejectedToken && token.expiresAt > Date.now() + 30_000);
+    };
+    if (isFreshReplacement()) return this.accessTokens.get(serverId)!.value;
 
     const refreshKey = `${serverId}:${agentId}`;
     const pending = this.accessTokenRefreshes.get(refreshKey);
@@ -184,13 +218,11 @@ export class YutangRuntime {
     const refresh = (async () => {
       const state = await this.store.load();
       if (state.settings.social_mode === 'off') throw new ApiError('SOCIAL_MODE_BLOCKED: off 模式已暂停鱼塘 Server 网络访问。');
-      const server = activeConnection(state);
-      if (server.id !== serverId || server.identity?.agent_id !== agentId) throw new ApiError('Server 连接或 Agent 身份已变化，请重试当前操作。');
+      const server = state.servers.find(item => item.id === serverId);
+      if (!server || server.identity?.agent_id !== agentId) throw new ApiError('Server 连接或 Agent 身份已变化，请重试当前操作。');
 
-      if (isFreshReplacement(this.accessToken)) return this.accessToken!.value;
-      if (this.accessToken?.serverId === serverId && this.accessToken.agentId === agentId && this.accessToken.value === rejectedToken) {
-        this.accessToken = undefined;
-      }
+      if (isFreshReplacement()) return this.accessTokens.get(serverId)!.value;
+      if (this.accessTokens.get(serverId)?.value === rejectedToken) this.accessTokens.delete(serverId);
       return this.authenticate(server.identity, server.id, signal);
     })();
     this.accessTokenRefreshes.set(refreshKey, refresh);
@@ -226,39 +258,78 @@ export class YutangRuntime {
     });
   }
 
-  async authenticate(identity?: IdentityState, expectedServerId?: string, signal?: AbortSignal): Promise<string> {
+  /**
+   * Demo/test seam: adopt an already-registered Server identity, signing key included.
+   * Nothing is sent to the Server here; the next API call authenticates with that key.
+   */
+  async adoptIdentity(serverId: string, identity: IdentityState, privateKey: string): Promise<void> {
+    await this.store.updateConnection(serverId, { identity, pending_registration: null });
+    await this.storePrivateKey(serverId, privateKey);
+    this.accessTokens.delete(serverId);
+  }
+
+  async authenticate(identity?: IdentityState, serverId?: string, signal?: AbortSignal): Promise<string> {
     signal?.throwIfAborted();
     const state = await this.store.load();
-    const server = activeConnection(state);
-    if (expectedServerId !== undefined && server.id !== expectedServerId) throw new ApiError('Server 连接已切换，请重试当前操作。');
+    const server = serverId ? state.servers.find(item => item.id === serverId) : activeConnection(state);
+    if (!server) throw new ApiError('找不到此 Server 连接。');
     const current = identity ?? server.identity;
     if (!current) throw new ApiError('尚未注册鱼塘 Agent，请先在 DSH 设置中完成注册。');
     if (server.identity?.agent_id !== current.agent_id) throw new ApiError('当前 Server Agent 身份已变化，请重试当前操作。');
     if (!server.server_url) throw new ApiError('官方 Server 地址尚未由部署配置提供。');
-    if (this.accessToken?.serverId === server.id && this.accessToken.agentId === current.agent_id && this.accessToken.expiresAt > Date.now() + 30_000) return this.accessToken.value;
+    const cached = this.cachedToken(server.id, current.agent_id);
+    if (cached) return cached;
     const privateKey = await this.privateKey(server.id);
     const api = this.api(server);
     const session = await api.authenticate(current.agent_id, async (challenge) => sign(null, Buffer.from(challenge, 'utf8'), createPrivateKey(privateKey)).toString('base64url'), signal);
     signal?.throwIfAborted();
-    if (activeConnection(await this.store.load()).id !== server.id) throw new ApiError('Server 连接已切换，请重试当前操作。');
-    this.accessToken = { serverId: server.id, agentId: current.agent_id, value: session.access_token, expiresAt: Date.parse(session.expires_at) };
+    const latestServer = (await this.store.load()).servers.find(item => item.id === server.id);
+    if (latestServer?.identity?.agent_id !== current.agent_id) throw new ApiError('Server 连接或 Agent 身份已变化，请重试当前操作。');
+    this.accessTokens.set(server.id, { agentId: current.agent_id, value: session.access_token, expiresAt: Date.parse(session.expires_at) });
     await this.store.updateConnection(server.id, { identity: { ...current, scopes: session.agent.scopes } });
     return session.access_token;
   }
 
+  /**
+   * API client bound to the identity of one DSH Session.
+   * A bound Session always acts as its own Connection; unbound Sessions keep the legacy
+   * profile-wide behaviour (with `expectedServerId` guarding against a mid-flight switch).
+   */
+  async apiForSession(sessionId: string | undefined, expectedServerId?: string, signal?: AbortSignal): Promise<YutangApi> {
+    signal?.throwIfAborted();
+    const ownerSessionId = this.sessionIdFor(sessionId);
+    const binding = bindingOf(await this.store.load(), ownerSessionId);
+    if (!binding) return this.apiForCurrentAgent(expectedServerId, signal);
+    if (expectedServerId !== undefined && binding.connection_id !== expectedServerId) throw new ApiError('Server 连接已切换，请重试当前操作。');
+    return this.apiForConnection(binding.connection_id, signal);
+  }
+
+  /** Connection a tool-calling agent must act against, resolved through its owning Session. */
+  async connectionIdForSession(sessionId: string | undefined): Promise<string> {
+    const state = await this.store.load();
+    return connectionForSession(state, this.sessionIdFor(sessionId)).id;
+  }
+
   async apiForCurrentAgent(expectedServerId?: string, signal?: AbortSignal): Promise<YutangApi> {
+    const state = await this.store.load();
+    const server = activeConnection(state);
+    if (expectedServerId !== undefined && server.id !== expectedServerId) throw new ApiError('Server 连接已切换，请重试当前操作。');
+    return this.apiForConnection(server.id, signal);
+  }
+
+  private async apiForConnection(connectionId: string, signal?: AbortSignal): Promise<YutangApi> {
     signal?.throwIfAborted();
     const state = await this.store.load();
     if (state.settings.social_mode === 'off') throw new ApiError('SOCIAL_MODE_BLOCKED: off 模式已暂停鱼塘 Server 网络访问。');
-    const server = activeConnection(state);
-    if (expectedServerId !== undefined && server.id !== expectedServerId) throw new ApiError('Server 连接已切换，请重试当前操作。');
+    const server = state.servers.find(item => item.id === connectionId);
+    if (!server) throw new ApiError('Server 连接已切换，请重试当前操作。');
     if (!server.identity) throw new ApiError('尚未注册鱼塘 Agent，请先在 DSH 设置中完成注册。');
     const accessToken = await this.authenticate(server.identity, server.id, signal);
     signal?.throwIfAborted();
     const latest = await this.store.load();
     if (latest.settings.social_mode === 'off') throw new ApiError('SOCIAL_MODE_BLOCKED: off 模式已暂停鱼塘 Server 网络访问。');
-    const latestServer = activeConnection(latest);
-    if (latestServer.id !== server.id) throw new ApiError('Server 连接已切换，请重试当前操作。');
+    const latestServer = latest.servers.find(item => item.id === server.id);
+    if (!latestServer?.identity) throw new ApiError('Server 连接或 Agent 身份已变化，请重试当前操作。');
     const api = this.api(latestServer, accessToken);
     api.setUnauthorizedRecovery((rejectedToken, requestSignal) => this.recoverUnauthorizedToken(latestServer.id, latestServer.identity!.agent_id, rejectedToken, requestSignal));
     // Revalidate on every tool operation so cached Bearer Sessions cannot
@@ -285,7 +356,7 @@ export class YutangRuntime {
       if (current.id === serverId) return target;
       await this.beforeServerSwitch?.(serverId);
       const server = await this.store.selectServer(serverId);
-      this.accessToken = undefined;
+      this.accessTokens.clear();
       await this.notifySettingsChanged();
       return server;
     });
@@ -306,7 +377,7 @@ export class YutangRuntime {
     await this.store.removeServer(serverId);
     await this.credentials.deleteRecord(this.identityCredential(serverId));
     if (wasActive) {
-      this.accessToken = undefined;
+      this.accessTokens.clear();
       await this.notifySettingsChanged();
     }
     this.logInfo('Unregistered Server connection removed locally', { server_id: serverId, pending_registration: Boolean(server.pending_registration) });
@@ -364,7 +435,7 @@ export class YutangRuntime {
     const challenge = `dsh-yutang-agent-unregister:v1\n${identity.agent_id}`;
     const signature = sign(null, Buffer.from(challenge, 'utf8'), createPrivateKey(privateKey)).toString('base64url');
     await this.api(server).unregisterAgent(identity.agent_id, signature);
-    this.accessToken = undefined;
+    this.accessTokens.delete(server.id);
     this.workerGrants.delete(identity.agent_id);
     await this.store.forgetUnregisteredServer(server.id);
     await this.credentials.deleteRecord(this.identityCredential(server.id));
@@ -380,7 +451,7 @@ export class YutangRuntime {
       const value = settings[key as keyof PluginSettings];
       if (key === 'social_mode' && (typeof value !== 'string' || !['auto', 'lurk', 'manual', 'off'].includes(value))) throw new ApiError('社交模式不受支持。');
       if (key === 'poll_interval_minutes' && (typeof value !== 'number' || ![5, 10, 30, 60].includes(value))) throw new ApiError('巡查间隔不受支持。');
-      if (key === 'browse_schedule_mode' && (typeof value !== 'string' || !['off', 'hourly', 'daily', 'curiosity'].includes(value))) throw new ApiError('自动巡看模式不受支持。');
+      if (key === 'browse_schedule_mode' && (typeof value !== 'string' || !['off', 'hourly', 'daily', 'curiosity', 'loop'].includes(value))) throw new ApiError('自动巡看模式不受支持。');
       if (key === 'daily_browse_time' && (typeof value !== 'string' || !/^(?:[01]\d|2[0-3]):[0-5]\d$/u.test(value))) throw new ApiError('每日巡看时间必须是 24 小时制 HH:mm。');
       if (key === 'scheduled_session_id' && value !== null && (typeof value !== 'string' || value.length > 160)) throw new ApiError('定时会话 ID 无效。');
       if (key in stringLimits && (typeof value !== 'string' || value.length > stringLimits[key as keyof typeof stringLimits])) throw new ApiError(`${key} 内容类型无效或超出长度限制。`);
@@ -409,8 +480,33 @@ export class YutangRuntime {
     this.turnLockAllowedTools = [...result.tool_lock_allowed_tools];
     this.socialPrompt = this.renderPrompt(result);
     this.promptChanged?.();
+    await this.syncScheduledSessionBinding();
     void this.notifySettingsChanged();
     return result;
+  }
+
+  /**
+   * Bridge the legacy profile-wide switches onto the per-Session binding table.
+   *
+   * A Session picked as `scheduled_session_id` gets its own binding so the worker can run as
+   * that identity. While the profile still owns a single binding, the global automation
+   * switches keep driving it; once several Sessions are bound, each one tunes itself.
+   */
+  private async syncScheduledSessionBinding() {
+    const state = await this.store.load();
+    const sessionId = state.settings.scheduled_session_id;
+    if (!sessionId) return;
+    const patch = {
+      mention_wakeup_enabled: state.settings.mention_wakeup_enabled,
+      browse_schedule_mode: state.settings.browse_schedule_mode,
+      daily_browse_time: state.settings.daily_browse_time,
+    };
+    const existing = state.session_bindings[sessionId];
+    if (!existing) {
+      await this.store.bindSession(sessionId, activeConnection(state).id, patch);
+      return;
+    }
+    if (Object.keys(state.session_bindings).length === 1) await this.store.updateSessionBinding(sessionId, patch);
   }
 
   async updateProfile(displayName: string) {
